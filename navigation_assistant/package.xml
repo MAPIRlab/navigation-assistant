@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<package>
+  <name>navigation_assistant</name>
+  <version>0.0.1</version>
+  <description>Action Server to assist the robot to reach navigation goals. 
+               It works as a wrapper of MobeBase action server, and implements some robustness features to improve navigation success.
+               An RVIZ tool is also provided to ease the definition of navigation goals (nodes) and critical navigation goals.
+  </description>
+
+  <maintainer email="jgmonroy@uma.es">Javier Monroy</maintainer>
+
+  <license>GPLv3</license>
+
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>roscpp</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>actionlib</build_depend>
+  <build_depend>actionlib_msgs</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>move_base</build_depend>
+  <build_depend>topology_graph</build_depend>
+  <build_depend>eigen</build_depend>
+  <build_depend>roslib</build_depend>
+  <build_depend>qtbase5-dev</build_depend>
+  <build_depend>message_generation</build_depend>
+  <build_depend>rviz</build_depend>
+
+  <run_depend>roscpp</run_depend>
+  <run_depend>actionlib</run_depend>
+  <run_depend>actionlib_msgs</run_depend>
+  <run_depend>sensor_msgs</run_depend>
+  <run_depend>geometry_msgs</run_depend>
+  <run_depend>nav_msgs</run_depend>
+  <run_depend>move_base</run_depend>
+  <run_depend>topology_graph</run_depend>
+  <run_depend>eigen</run_depend>
+  <run_depend>roslib</run_depend>
+  <run_depend>libqt5-core</run_depend>
+  <run_depend>libqt5-gui</run_depend>
+  <run_depend>libqt5-widgets</run_depend>
+  <run_depend>message_runtime</run_depend>
+  <run_depend>rviz</run_depend>
+  
+<!-- IMPORTANT FOR RVIZ TOOLS -->
+  <export>
+    <rviz plugin="${prefix}/plugin_description.xml"/>
+  </export>
+</package>

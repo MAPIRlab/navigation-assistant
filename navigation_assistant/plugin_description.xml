@@ -1,0 +1,15 @@
+<library path="lib/libnavigation_assistant">
+
+  <class name="navigation_assistant/SetNavGoal" type="rviz::SetNavGoalTool" base_class_type="rviz::Tool">
+    <description>
+      Tool for commanding Navigation Goals to the Navigation Assistant Action Server
+    </description>
+  </class>
+  
+  <class name="navigation_assistant/SetPointOfInterest" type="POI::SetPointOfInterestTool" base_class_type="rviz::Tool">
+    <description>
+      Tool for setting Points of Interest such as space-nodes and Critical Navigation Points
+    </description>
+  </class>
+  
+</library>
