@@ -57,6 +57,7 @@ namespace POI
             if( event->key() == Qt::Key_Shift )
                 shift_down = false;
         }
+        return 1;
     }
 
     // Handling mouse events
@@ -112,6 +113,7 @@ namespace POI
         else if (event.middleDown())
         {
         }
+        return 1;
     }
 
 } //end namespace
