@@ -1,100 +1,120 @@
 #include "nav_assistant.h"
 #include <iostream>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Vector3.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <boost/algorithm/string.hpp>
 
 using json = nlohmann::json;
+using namespace std::placeholders;
 
 //-----------------------------------------------------------
 //                    Subscriptions
 //----------------------------------------------------------
 
 // Robot location update
-void CNavAssistant::localizationCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &msg)
+void CNavAssistant::localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
 {
     //keep the most recent robot pose = position + orientation
     current_robot_pose = *msg;
 }
 
-
+double getYaw(const geometry_msgs::msg::Pose& pose)
+{
+    tf2::Quaternion quat;
+    tf2::fromMsg(pose.orientation, quat);
+    tf2::Matrix3x3 m(quat);
+    double roll, pitch, yaw;
+    m.getRPY(roll, pitch, yaw);
+    return yaw;
+}
 
 //-----------------------------------------------------------
 //                    Action Server Initialization
 //----------------------------------------------------------
-CNavAssistant::CNavAssistant(std::string name) :
-    as_(nh_, name, boost::bind(&CNavAssistant::executeAS, this, _1),false),
-    mb_action_client("move_base",true)
+CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant Server")
 {
     /*! IMPORTANT
      * DEFINE all Action Servers to be used or published before executing the callback to avoid problems
      * */
 
+    as_ = rclcpp_action::create_server<NAS_ac::NavAssistant>(this, name, 
+        std::bind(&CNavAssistant::handle_goal, this, _1, _2), 
+        std::bind(&CNavAssistant::handle_cancel, this, _1),
+        std::bind(&CNavAssistant::handle_accepted, this, _1)
+    ); 
+
     // Read config parameters
-    ros::NodeHandle pn("~");
-    pn.param<bool>("verbose", verbose, false);
-    pn.param<bool>("init_from_param", init_from_param, false);
-    pn.param<std::string>("topological_json_parameter",topology_parameter,"/topological_map");
-    pn.param<bool>("load_passages_as_CP", load_passages_as_CP, false);
-    pn.param<bool>("force_CP_as_additional_ANP", force_CP_as_additional_ANP, false);
-    pn.param<std::string>("init_from_file",init_from_file,"~/topological_map");
-    pn.param<std::string>("save_to_file",save_to_file,"");
+    verbose = declare_parameter<bool>("verbose",  false);
+    init_from_param = declare_parameter<bool>("init_from_param",  false);
+    topology_parameter = declare_parameter<std::string>("topological_json_parameter","/topological_map");
+    load_passages_as_CP = declare_parameter<bool>("load_passages_as_CP",  false);
+    force_CP_as_additional_ANP = declare_parameter<bool>("force_CP_as_additional_ANP",  false);
+    init_from_file = declare_parameter<std::string>("init_from_file","~/topological_map");
+    save_to_file = declare_parameter<std::string>("save_to_file","");
 
 
-    makePlanServer = pn.advertiseService("make_plan", &CNavAssistant::makePlan, this);
+    makePlanServer = create_service<NAS::MakePlan>("make_plan", std::bind(&CNavAssistant::makePlan, this, _1, _2));
 
 
     // Service clients
-    mb_srv_client = nh_.serviceClient<nav_msgs::GetPlan>("/move_base/NavfnROS/make_plan");  // only accounts for global_costmap but works at all times
-    graph_srv_client = nh_.serviceClient<topology_graph::graph>("topology_graph/graph");    // Graph service client
-    nav_assist_functions_client = nh_.serviceClient<navigation_assistant::nav_assistant_poi>("navigation_assistant/get_poi_related_poses");
-    nav_assist_functions_client2 = nh_.serviceClient<navigation_assistant::nav_assistant_set_CNP>("navigation_assistant/get_cnp_pose_around");
+    mb_action_client = rclcpp_action::create_client<NavToPose>(this, "navigate_to_pose");
+    mb_srv_client = create_client<nav_msgs::srv::GetPlan>("/move_base/NavfnROS/make_plan");  // only accounts for global_costmap but works at all times
+    graph_srv_client = create_client<topology_graph::srv::Graph>("topology_graph/graph");    // Graph service client
+    nav_assist_functions_client_POI = create_client<NAS::NavAssistantPOI>("navigation_assistant/get_poi_related_poses");
+    nav_assist_functions_client_CNP = create_client<NAS::NavAssistantSetCNP>("navigation_assistant/get_cnp_pose_around");
 
     // Subscribers
-    localization_sub_ = nh_.subscribe("/amcl_pose",100,&CNavAssistant::localizationCallback,this);
+    localization_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/amcl_pose", 100, std::bind(&CNavAssistant::localizationCallback,this, _1) );
 
     // Publishers
-    cmd_vel_publisher = nh_.advertise<geometry_msgs::Twist>("cmd_vel",1);
-    ready_publisher = nh_.advertise<std_msgs::Bool>("/nav_assistant/ready",1);
+    cmd_vel_publisher = create_publisher<geometry_msgs::msg::Twist>("cmd_vel",1);
+    ready_publisher = create_publisher<std_msgs::msg::Bool>("/nav_assistant/ready",1);
 
+    {
+        using namespace std::chrono_literals;
+        // WAITs
+        while (!mb_action_client->wait_for_action_server(30s))
+            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with MoveBase serer! waiting...");
+        while (!mb_srv_client->wait_for_service(30s) )
+            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with MoveBase make_plan srv! waiting...");
+        while (!graph_srv_client->wait_for_service(30s) )
+            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with the GRAPH srv! waiting...");
+        while (!nav_assist_functions_client_POI->wait_for_service(30s) )
+            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with the navigation_assistant functions srv! waiting...");
+        while (!nav_assist_functions_client_CNP->wait_for_service(30s) )
+            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with the navigation_assistant functions srv! waiting...");
 
-    // WAITs
-    while (!mb_action_client.waitForServer(ros::Duration(30)))
-        ROS_ERROR("[NavAssistant] Unable to contact with MoveBase serer! waiting...");
-    while (!mb_srv_client.waitForExistence(ros::Duration(30)) )
-        ROS_ERROR("[NavAssistant] Unable to contact with MoveBase make_plan srv! waiting...");
-    while (!graph_srv_client.waitForExistence(ros::Duration(30)) )
-        ROS_ERROR("[NavAssistant] Unable to contact with the GRAPH srv! waiting...");
-    while (!nav_assist_functions_client.waitForExistence(ros::Duration(30)) )
-        ROS_ERROR("[NavAssistant] Unable to contact with the navigation_assistant functions srv! waiting...");
-    while (!nav_assist_functions_client2.waitForExistence(ros::Duration(30)) )
-        ROS_ERROR("[NavAssistant] Unable to contact with the navigation_assistant functions srv! waiting...");
-
+    }
 
     // All srv and actions are ready to be used.
     // Initialize Navigation Graph
     if (init_from_file != "")
     {
         // The topology has been previously saved to file. Reload it.
-        ROS_INFO("[NavAssistant] Loading Graph from file [%s]", init_from_file.c_str());
+        RCLCPP_INFO(get_logger(), "[NavAssistant] Loading Graph from file [%s]", init_from_file.c_str());
         //File contains a boost::graphviz description of the nodes and arcs
-        topology_graph::graph srv_call2;
-        srv_call2.request.cmd = "LoadGraph";    // params: [file_path]
-        srv_call2.request.params.clear();
-        srv_call2.request.params.push_back(init_from_file);
-        graph_srv_client.call(srv_call2);
-        if (!srv_call2.response.success)
-            ROS_WARN("[NavAssistant]: Unable to Load Graph from file. Skipping.");
+        topology_graph::srv::Graph::Request::SharedPtr request;
+        request->cmd = "LoadGraph";    // params: [file_path]
+        request->params.clear();
+        request->params.push_back(init_from_file);
+
+        auto future = graph_srv_client->async_send_request(request);
+        if (rclcpp::spin_until_future_complete(shared_from_this(), future) != rclcpp::FutureReturnCode::SUCCESS)
+            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to Load Graph from file. Skipping.");
     }
 
     if (init_from_param)
     {
         // The topology is provided externally (MoveCare project)
-        ROS_INFO("[NavAssistant] Loading Graph from parameter [%s]", topology_parameter.c_str());
+        RCLCPP_INFO(get_logger(), "[NavAssistant] Loading Graph from parameter [%s]", topology_parameter.c_str());
         //Get global parameter with the JSON description of the topology
         bool topo_found = false;
-        while (ros::ok() && !topo_found)
+        while (rclcpp::ok() && !topo_found)
         {
-            if (nh_.hasParam(topology_parameter))
+            if (has_parameter(topology_parameter))
             {
-                nh_.param<std::string>(topology_parameter, topology_str, "");
+                get_parameter<std::string>(topology_parameter, topology_str);
                 json json_msg = json::parse( topology_str );
 
                 // Process JSON
@@ -105,61 +125,59 @@ CNavAssistant::CNavAssistant(std::string name) :
             }
             else
             {
-                ROS_WARN("[topology_graph] Waiting for topological_map global parameter (see TaskCoordinator node).");
-                ros::Duration(2.0).sleep();
+                RCLCPP_WARN(get_logger(), "[topology_graph] Waiting for topological_map global parameter (see TaskCoordinator node).");
+                rclcpp::sleep_for(std::chrono::duration_cast<std::chrono::nanoseconds>(2s));
             }
         }
     }
-    // Disable the init_from_param to avoid reloading the topology in case or node-relaunch
-    pn.setParam("init_from_param", false);
-
-    // Action server has been initialized and the executeAS linked!. Start offering the server over ROS
-    as_.start();
 
     // Advertise service to add new points
-    service = nh_.advertiseService("/navigation_assistant/add_point_of_interest", &CNavAssistant::srvCB, this);
+    service = create_service<NAS::NavAssistantPoint>("/navigation_assistant/add_point_of_interest", std::bind(&CNavAssistant::srvCB, this, _1, _2) );
 
-    std_msgs::Bool ready_msg;
+    std_msgs::msg::Bool ready_msg;
     ready_msg.data = true;
-    ready_publisher.publish(ready_msg);
+    ready_publisher->publish(ready_msg);
 
     // init internal variables
     counter = 0;
-    ROS_INFO("[NavAssistant] Node ready for action!");
+    RCLCPP_INFO(get_logger(), "[NavAssistant] Node ready for action!");
 }
 
-bool CNavAssistant::makePlan(navigation_assistant::make_plan::Request& request, navigation_assistant::make_plan::Response& response)
+bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::MakePlan::Response::SharedPtr response)
 {
-    nav_msgs::GetPlan mb_srv;
+    nav_msgs::srv::GetPlan::Request::SharedPtr mb_request;
 
     // 1. Set starting pose (robot location)
-    mb_srv.request.start.header.frame_id = "map";
-    mb_srv.request.start.header.stamp = ros::Time::now();
-    mb_srv.request.start.pose = current_robot_pose.pose.pose;
+    mb_request->start.header.frame_id = "map";
+    mb_request->start.header.stamp = now();
+    mb_request->start.pose = current_robot_pose.pose.pose;
     // Set Goal pose
 
-    mb_srv.request.goal.header.frame_id = "map";
-    mb_srv.request.goal.header.stamp = ros::Time::now();
-    mb_srv.request.goal.pose.position.x = request.x;
-    mb_srv.request.goal.pose.position.y = request.y;
-    mb_srv.request.goal.pose.position.z = request.z;
+    mb_request->goal.header.frame_id = "map";
+    mb_request->goal.header.stamp = now();
+    mb_request->goal.pose.position.x = request->x;
+    mb_request->goal.pose.position.y = request->y;
+    mb_request->goal.pose.position.z = request->z;
 
+    auto future = mb_srv_client->async_send_request(mb_request); 
+    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+    auto mb_response = future.get().get();
     //Check if valid goal with move_base srv
-    if( !mb_srv_client.call(mb_srv) )
+    if( result != rclcpp::FutureReturnCode::SUCCESS )
     {
         // SRV is not available!! Report Error
-        ROS_ERROR("[NavAssistant-turn_towards_path] Unable to call MAKE_PLAN service from MoveBase");
-        response.validPath = false;
+        RCLCPP_ERROR(get_logger(), "[NavAssistant-turn_towards_path] Unable to call MAKE_PLAN service from MoveBase");
+        response->valid_path = false;
         return false;
     }
-    else if ( mb_srv.response.plan.poses.empty() )
+    else if ( mb_response->plan.poses.empty() )
     {
-        if (verbose) ROS_WARN("[NavAssistant-turn_towards_path] Unable to get plan");
-        response.validPath = false;
+        if (verbose) RCLCPP_WARN(get_logger(), "[NavAssistant-turn_towards_path] Unable to get plan");
+        response->valid_path = false;
         return true;
     }
 
-    response.validPath = true;
+    response->valid_path = true;
     return true;
 }
 
@@ -203,7 +221,7 @@ void CNavAssistant::get_graph_data_from_json(json json_msg)
     }
     catch (exception e)
     {
-        ROS_ERROR("[topology_graph] Error getting Poses. Error is: [%s]", e.what());
+        RCLCPP_ERROR(get_logger(), "[topology_graph] Error getting Poses. Error is: [%s]", e.what());
         std::cout << json_msg.dump(4) << std::endl;
         return;
     }
@@ -237,7 +255,7 @@ void CNavAssistant::get_graph_data_from_json(json json_msg)
     }
     catch (exception e)
     {
-        ROS_ERROR("[NavAssistant] Error loading graph data. Spaces list malformed [%s]", e.what());
+        RCLCPP_ERROR(get_logger(), "[NavAssistant] Error loading graph data. Spaces list malformed [%s]", e.what());
         std::cout << json_msg.dump(4) << std::endl;
         return;
     }
@@ -263,7 +281,7 @@ void CNavAssistant::get_graph_data_from_json(json json_msg)
     }
     catch (exception e)
     {
-        ROS_ERROR("[NavAssistant] Error loading graph data. Passages list malformed [%s]", e.what());
+        RCLCPP_ERROR(get_logger(), "[NavAssistant] Error loading graph data. Passages list malformed [%s]", e.what());
         std::cout << json_msg.dump(4) << std::endl;
         return;
     }
@@ -285,13 +303,15 @@ void CNavAssistant::get_graph_data_from_json(json json_msg)
     }
     catch (exception e)
     {
-        ROS_ERROR("[taskCoordinator] Error loading Env data. Passages list malformed [%s]", e.what());
+        RCLCPP_ERROR(get_logger(), "[taskCoordinator] Error loading Env data. Passages list malformed [%s]", e.what());
         std::cout << json_msg.dump(4) << std::endl;
         return;
     }
 
-    // Finally, regenerate Arcs
-    ros::Duration(1.0).sleep();
+    // Finally, regenerate Arcs                
+    using namespace std::chrono_literals;
+    rclcpp::sleep_for(std::chrono::duration_cast<std::chrono::nanoseconds>(1s));
+
     regenerate_arcs();
 }
 
@@ -309,74 +329,86 @@ void CNavAssistant::get_graph_data_from_json(json json_msg)
 bool CNavAssistant::addNode(std::string node_label, std::string node_type, double pose_x, double pose_y, double pose_yaw)
 {
     // node as a pose
-    geometry_msgs::PoseStamped node_pose;
+    geometry_msgs::msg::PoseStamped node_pose;
     node_pose.header.frame_id = "map";
-    node_pose.header.stamp = ros::Time(0);
+    node_pose.header.stamp = rclcpp::Time(0);
     node_pose.pose.position.x = pose_x;
     node_pose.pose.position.y = pose_y;
     node_pose.pose.position.z = 0.0;
-    node_pose.pose.orientation = tf::createQuaternionMsgFromYaw(pose_yaw);
+    node_pose.pose.orientation = tf2::toMsg( tf2::Quaternion(tf2::Vector3(0,0,1), pose_yaw) );
 
     if (node_type == "CNP" || node_type == "CP" || node_type == "passage")
     {
-        if (verbose) ROS_INFO("[NavAssistant] Estimating optimal pose for CNP around [%.3f, %.3f]", pose_x, pose_y);
+        if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Estimating optimal pose for CNP around [%.3f, %.3f]", pose_x, pose_y);
         // Estimate best location for the CP/CNP/passage around given pose
-        navigation_assistant::nav_assistant_set_CNP srv_call;
-        srv_call.request.pose = node_pose;
-        nav_assist_functions_client2.call(srv_call);
-
+        NAS::NavAssistantSetCNP::Request::SharedPtr request;
+        request->pose = node_pose;
+        auto future = nav_assist_functions_client_CNP->async_send_request(request);
+        rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto response = future.get().get();
         //Update pose
-        if (srv_call.response.success)
+        if (response->success)
         {
-            node_pose = srv_call.response.pose;
-            if (verbose) ROS_INFO("[NavAssistant] Setting CNP at [%.3f, %.3f]", node_pose.pose.position.x, node_pose.pose.position.y);
+            node_pose = response->pose;
+            if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Setting CNP at [%.3f, %.3f]", node_pose.pose.position.x, node_pose.pose.position.y);
         }
         else
-            if (verbose) ROS_INFO("[NavAssistant] Error setting CNP around [%.3f, %.3f], Using exact point.", pose_x, pose_y);
+            if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Error setting CNP around [%.3f, %.3f], Using exact point.", pose_x, pose_y);
     }
 
 
     // 1. Add a new node in the graph
-    topology_graph::graph srv_call;
-    srv_call.request.cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
-    srv_call.request.params.push_back(node_label);
-    srv_call.request.params.push_back(node_type);
-    srv_call.request.params.push_back(std::to_string(node_pose.pose.position.x));
-    srv_call.request.params.push_back(std::to_string(node_pose.pose.position.y));
-    srv_call.request.params.push_back(std::to_string(pose_yaw));
-    graph_srv_client.call(srv_call);
-    if (!srv_call.response.success)
+    topology_graph::srv::Graph::Request::SharedPtr graphRequest;
+    graphRequest->cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
+    graphRequest->params.push_back(node_label);
+    graphRequest->params.push_back(node_type);
+    graphRequest->params.push_back(std::to_string(node_pose.pose.position.x));
+    graphRequest->params.push_back(std::to_string(node_pose.pose.position.y));
+    graphRequest->params.push_back(std::to_string(pose_yaw));
+        
     {
-        ROS_WARN("[NavAssistant]: Unable to create new Node");
-        return false;
-    }    
+        auto future = graph_srv_client->async_send_request(graphRequest);
+        rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto response = future.get().get();
+        
+        if (!response->success)
+        {
+            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create new Node");
+            return false;
+        }    
+    }
 
     // According to the type of node, additional nodes may be necessary
     if (node_type == "passage")
     {
         // Estimate and Add the two Segment Points (SP) that define this passage
-        navigation_assistant::nav_assistant_poi poi_srv_call;
-        poi_srv_call.request.pose = node_pose;
-        nav_assist_functions_client.call(poi_srv_call);
+        navigation_assistant::srv::NavAssistantPOI::Request::SharedPtr request;
+        request->pose = node_pose;
 
-        if (poi_srv_call.response.success)
+        auto future = nav_assist_functions_client_POI->async_send_request(request);
+        rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto response = future.get().get();
+
+        if (response->success)
         {
-            for (auto p: poi_srv_call.response.sp)
+            for (auto p: response->sp)
             {
-                srv_call.request.cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
-                srv_call.request.params.clear();
-                srv_call.request.params.push_back(node_label);   //use the same label as the original POI
-                srv_call.request.params.push_back("SP");
-                srv_call.request.params.push_back(std::to_string(p.pose.position.x));
-                srv_call.request.params.push_back(std::to_string(p.pose.position.y));
-                tf::Pose tfpose;
-                tf::poseMsgToTF(p.pose, tfpose);
-                double yaw_angle = tf::getYaw(tfpose.getRotation());
-                srv_call.request.params.push_back(std::to_string(yaw_angle));
-                graph_srv_client.call(srv_call);
-                if (!srv_call.response.success)
+                graphRequest->cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
+                graphRequest->params.clear();
+                graphRequest->params.push_back(node_label);   //use the same label as the original POI
+                graphRequest->params.push_back("SP");
+                graphRequest->params.push_back(std::to_string(p.pose.position.x));
+                graphRequest->params.push_back(std::to_string(p.pose.position.y));
+
+                graphRequest->params.push_back(std::to_string(getYaw(p.pose)));
+                
+                auto future = graph_srv_client->async_send_request(graphRequest);
+                rclcpp::spin_until_future_complete(shared_from_this(), future);
+                auto response = future.get().get();
+
+                if (!response->success)
                 {
-                    ROS_WARN("[NavAssistant]: Unable to create new Node");
+                    RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create new Node");
                     return false;
                 }
             }
@@ -387,56 +419,64 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
     else if ( (node_type == "CNP") || (node_type == "CP") )
     {
         // Estimate and Add the two Segment Points (SP) and the two Intermediate Navigation Goals (ING)
-        navigation_assistant::nav_assistant_poi poi_srv_call;
-        poi_srv_call.request.pose = node_pose;
-        nav_assist_functions_client.call(poi_srv_call);
+        NAS::NavAssistantPOI::Request::SharedPtr poiRequest;
+        poiRequest->pose = node_pose;
 
-        if (poi_srv_call.response.success)
+        auto future = nav_assist_functions_client_POI->async_send_request(poiRequest);
+        rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto response = future.get().get();
+
+        if (response->success)
         {
             //2.1 Add "SP" nodes (Segment Points)
-            for (auto p: poi_srv_call.response.sp)
+            for (auto p: response->sp)
             {
-                srv_call.request.cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
-                srv_call.request.params.clear();
-                srv_call.request.params.push_back(node_label);   //use the same label as the original POI
-                srv_call.request.params.push_back("SP");
-                srv_call.request.params.push_back(std::to_string(p.pose.position.x));
-                srv_call.request.params.push_back(std::to_string(p.pose.position.y));
-                tf::Pose tfpose;
-                tf::poseMsgToTF(p.pose, tfpose);
-                double yaw_angle = tf::getYaw(tfpose.getRotation());
-                srv_call.request.params.push_back(std::to_string(yaw_angle));
-                graph_srv_client.call(srv_call);
-                if (!srv_call.response.success)
+                graphRequest->cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
+                graphRequest->params.clear();
+                graphRequest->params.push_back(node_label);   //use the same label as the original POI
+                graphRequest->params.push_back("SP");
+                graphRequest->params.push_back(std::to_string(p.pose.position.x));
+                graphRequest->params.push_back(std::to_string(p.pose.position.y));
+
+                graphRequest->params.push_back(std::to_string(getYaw(p.pose)));
+                
+                auto future = graph_srv_client->async_send_request(graphRequest);
+                rclcpp::spin_until_future_complete(shared_from_this(), future);
+                auto response = future.get().get();
+
+                if (!response->success)
                 {
-                    ROS_WARN("[NavAssistant]: Unable to create new Node");
+                    RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create new Node");
                     return false;
                 }
             }
 
             //2.2 Add a "ING" nodes (intermediate navigation goals)
             std::vector<std::string> ing_id;
-            for (auto p: poi_srv_call.response.ing)
+            for (auto p: response->ing)
             {
-                srv_call.request.cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
-                srv_call.request.params.clear();
-                srv_call.request.params.push_back(node_label);   //use the same label as the original POI
-                srv_call.request.params.push_back("ING");
-                srv_call.request.params.push_back(std::to_string(p.pose.position.x));
-                srv_call.request.params.push_back(std::to_string(p.pose.position.y));
-                tf::Pose tfpose;
-                tf::poseMsgToTF(p.pose, tfpose);
-                double yaw_angle = tf::getYaw(tfpose.getRotation());
-                srv_call.request.params.push_back(std::to_string(yaw_angle));
-                graph_srv_client.call(srv_call);
-                if (!srv_call.response.success)
+                graphRequest->cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
+                graphRequest->params.clear();
+                graphRequest->params.push_back(node_label);   //use the same label as the original POI
+                graphRequest->params.push_back("SP");
+                graphRequest->params.push_back(std::to_string(p.pose.position.x));
+                graphRequest->params.push_back(std::to_string(p.pose.position.y));
+                
+
+                graphRequest->params.push_back(std::to_string(getYaw(p.pose)));
+                
+                auto future = graph_srv_client->async_send_request(graphRequest);
+                rclcpp::spin_until_future_complete(shared_from_this(), future);
+                auto response = future.get().get();
+
+                if (!response->success)
                 {
-                    ROS_WARN("[NavAssistant]: Unable to create new Node");
+                    RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create new Node");
                     return false;
                 }
 
                 //keep node_id
-                std::string current_node_id = srv_call.response.result[0];
+                std::string current_node_id = response->result[0];
                 ing_id.push_back(current_node_id);
             }            
         }
@@ -452,60 +492,82 @@ void CNavAssistant::regenerate_arcs()
     // Adding or Removing nodes affect the overall Arc distribution
 
     //1. Remove all Arcs in the Graph
-    if (verbose) ROS_INFO("[NavAssistant] Regenerating Arcs in Graph");
-    topology_graph::graph srv_call;
-    srv_call.request.cmd = "DeleteAllArcs";    // params: [node_id]
-    srv_call.request.params.push_back("-1");     // All nodes = -1
-    graph_srv_client.call(srv_call);
+    {
+        if (verbose) 
+            RCLCPP_INFO(get_logger(), "[NavAssistant] Regenerating Arcs in Graph");
+        topology_graph::srv::Graph::Request::SharedPtr clearRequest;
+        clearRequest->cmd = "DeleteAllArcs";    // params: [node_id]
+        clearRequest->params.push_back("-1");     // All nodes = -1
+        auto future = graph_srv_client->async_send_request(clearRequest);
+        rclcpp::spin_until_future_complete(shared_from_this(), future);
+    }
 
     /* Regenerate Arcs
      * Only nodes of type: ING, and optionally CP and CNP are connected in the graph
      * connections avoid Passages and Segment Points
      */
+
     std::vector<string> nodes_to_connect;
     nodes_to_connect.clear();
-    topology_graph::graph srv_call2;
-    // ING nodes
-    srv_call2.request.cmd = "GetNodesbyType";    // params: node_type
-    srv_call2.request.params.clear();
-    srv_call2.request.params.push_back("ING");
-    graph_srv_client.call(srv_call2);
-    if (!srv_call2.response.success)
     {
-        ROS_WARN("[NavAssistant-regenerateArcs]: Unable to get ING Nodes from Graph");
-        return;
+        topology_graph::srv::Graph::Request::SharedPtr regenerateRequest;
+        // ING nodes
+        regenerateRequest->cmd = "GetNodesbyType";    // params: node_type
+        regenerateRequest->params.clear();
+        regenerateRequest->params.push_back("ING");
+    
+        auto future = graph_srv_client->async_send_request(regenerateRequest);
+        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto response = future.get().get();
+    
+        if (!response->success)
+        {
+            RCLCPP_WARN(get_logger(), "[NavAssistant-regenerateArcs]: Unable to get ING Nodes from Graph");
+            return;
+        }
+        else
+            nodes_to_connect.insert(nodes_to_connect.end(), response->result.begin(), response->result.end());
     }
-    else
-        nodes_to_connect.insert(nodes_to_connect.end(), srv_call2.response.result.begin(), srv_call2.response.result.end());
 
     if (force_CP_as_additional_ANP)
     {
-        // CP nodes
-        srv_call2.request.cmd = "GetNodesbyType";    // params: node_type
-        srv_call2.request.params.clear();
-        srv_call2.request.params.push_back("CP");
-        graph_srv_client.call(srv_call2);
-        if (!srv_call2.response.success)
         {
-            ROS_WARN("[NavAssistant-regenerateArcs]: Unable to get CP Nodes from Graph");
-            return;
+            topology_graph::srv::Graph::Request::SharedPtr regenerateRequest;
+            // CP nodes
+            regenerateRequest->cmd = "GetNodesbyType";    // params: node_type
+            regenerateRequest->params.clear();
+            regenerateRequest->params.push_back("CP");
+            
+            auto future = graph_srv_client->async_send_request(regenerateRequest);
+            auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+            auto response = future.get().get();
+            if (!response->success)
+            {
+                RCLCPP_WARN(get_logger(), "[NavAssistant-regenerateArcs]: Unable to get CP Nodes from Graph");
+                return;
+            }
+            else
+                nodes_to_connect.insert(nodes_to_connect.end(), response->result.begin(), response->result.end());
         }
-        else
-            nodes_to_connect.insert(nodes_to_connect.end(), srv_call2.response.result.begin(), srv_call2.response.result.end());
 
-
-        // CNP nodes
-        srv_call2.request.cmd = "GetNodesbyType";    // params: node_type
-        srv_call2.request.params.clear();
-        srv_call2.request.params.push_back("CNP");
-        graph_srv_client.call(srv_call2);
-        if (!srv_call2.response.success)
         {
-            ROS_WARN("[NavAssistant-regenerateArcs]: Unable to get ING Nodes from Graph");
-            return;
+            topology_graph::srv::Graph::Request::SharedPtr regenerateRequest;
+            // CNP nodes
+            regenerateRequest->cmd = "GetNodesbyType";    // params: node_type
+            regenerateRequest->params.clear();
+            regenerateRequest->params.push_back("CNP");
+            
+            auto future = graph_srv_client->async_send_request(regenerateRequest);
+            auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+            auto response = future.get().get();
+            if (!response->success)
+            {
+                RCLCPP_WARN(get_logger(), "[NavAssistant-regenerateArcs]: Unable to get ING Nodes from Graph");
+                return;
+            }
+            else
+                nodes_to_connect.insert(nodes_to_connect.end(), response->result.begin(), response->result.end());
         }
-        else
-            nodes_to_connect.insert(nodes_to_connect.end(), srv_call2.response.result.begin(), srv_call2.response.result.end());
     }
 
 
@@ -531,33 +593,41 @@ void CNavAssistant::regenerate_arcs()
                 if (!force_CP_as_additional_ANP)
                 {
                     //Create Arc beetwing the two INGs
-                    topology_graph::graph srv_call3;
-                    srv_call3.request.cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
-                    srv_call3.request.params.clear();
-                    srv_call3.request.params.push_back(node_data[0]);
-                    srv_call3.request.params.push_back(node_data2[0]);
-                    srv_call3.request.params.push_back("arc");
-                    srv_call3.request.params.push_back("arc");
-                    srv_call3.request.params.push_back("true");       // bidirectional arc
-                    graph_srv_client.call(srv_call3);
-                    if (!srv_call3.response.success)
-                        ROS_WARN("[NavAssistant]: Unable to create Arc");
+                    topology_graph::srv::Graph::Request::SharedPtr addArcRequest;
+                    addArcRequest->cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
+                    addArcRequest->params.clear();
+                    addArcRequest->params.push_back(node_data[0]);
+                    addArcRequest->params.push_back(node_data2[0]);
+                    addArcRequest->params.push_back("arc");
+                    addArcRequest->params.push_back("arc");
+                    addArcRequest->params.push_back("true");       // bidirectional arc
+                    
+                    auto future = graph_srv_client->async_send_request(addArcRequest);
+                    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+                    auto response = future.get().get();
+
+                    if (!response->success)
+                        RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create Arc");
                 }
                 // Create arc if different types
                 else if (node_data[2] != node_data2[2])
                 {
                     //Create Arc
-                    topology_graph::graph srv_call3;
-                    srv_call3.request.cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
-                    srv_call3.request.params.clear();
-                    srv_call3.request.params.push_back(node_data[0]);
-                    srv_call3.request.params.push_back(node_data2[0]);
-                    srv_call3.request.params.push_back("arc");
-                    srv_call3.request.params.push_back("arc");
-                    srv_call3.request.params.push_back("true");       // bidirectional arc
-                    graph_srv_client.call(srv_call3);
-                    if (!srv_call3.response.success)
-                        ROS_WARN("[NavAssistant]: Unable to create Arc");
+                    topology_graph::srv::Graph::Request::SharedPtr addArcRequest;
+                    addArcRequest->cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
+                    addArcRequest->params.clear();
+                    addArcRequest->params.push_back(node_data[0]);
+                    addArcRequest->params.push_back(node_data2[0]);
+                    addArcRequest->params.push_back("arc");
+                    addArcRequest->params.push_back("arc");
+                    addArcRequest->params.push_back("true");       // bidirectional arc
+                    
+                    auto future = graph_srv_client->async_send_request(addArcRequest);
+                    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+                    auto response = future.get().get();
+
+                    if (!response->success)
+                        RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create Arc");
                 }
             }
 
@@ -568,40 +638,47 @@ void CNavAssistant::regenerate_arcs()
                 {
                     // Create arc if different label and type ING
                     // Check if there is a path not crossing a segment defined by a CNP or CP
-                    topology_graph::graph srv_call_dist;
-                    srv_call_dist.request.cmd = "GetNavDistTwoPoses";    // params: p1(x,y,yaw), p2(x,y,yaw), [avoid_node_types]
-                    srv_call_dist.request.params.clear();
+                    topology_graph::srv::Graph::Request::SharedPtr distanceRequest;
+                    distanceRequest->cmd = "GetNavDistTwoPoses";    // params: p1(x,y,yaw), p2(x,y,yaw), [avoid_node_types]
+                    distanceRequest->params.clear();
                     // p1
-                    srv_call_dist.request.params.push_back(node_data[3].c_str());
-                    srv_call_dist.request.params.push_back(node_data[4].c_str());
-                    srv_call_dist.request.params.push_back(node_data[5].c_str());
+                    distanceRequest->params.push_back(node_data[3].c_str());
+                    distanceRequest->params.push_back(node_data[4].c_str());
+                    distanceRequest->params.push_back(node_data[5].c_str());
                     // p2
-                    srv_call_dist.request.params.push_back(node_data2[3].c_str());
-                    srv_call_dist.request.params.push_back(node_data2[4].c_str());
-                    srv_call_dist.request.params.push_back(node_data2[5].c_str());
+                    distanceRequest->params.push_back(node_data2[3].c_str());
+                    distanceRequest->params.push_back(node_data2[4].c_str());
+                    distanceRequest->params.push_back(node_data2[5].c_str());
                     // avoid intersecting nodes of type
-                    srv_call_dist.request.params.push_back("CNP");
-                    srv_call_dist.request.params.push_back("CP");
-                    graph_srv_client.call(srv_call_dist);
+                    distanceRequest->params.push_back("CNP");
+                    distanceRequest->params.push_back("CP");
 
-                    if (verbose) ROS_WARN("[NavAssistant]: NavDistance between Node[%s] <-> [%s] is %s (succes=%d)",node_data[0].c_str(), node_data2[0].c_str(), srv_call_dist.response.result[0].c_str(), srv_call_dist.response.success);
+                    auto future = graph_srv_client->async_send_request(distanceRequest);
+                    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+                    auto response = future.get().get();
 
-                    if (srv_call_dist.response.success)
+                    if (verbose) 
+                        RCLCPP_WARN(get_logger(), "[NavAssistant]: NavDistance between Node[%s] <-> [%s] is %s (succes=%d)",node_data[0].c_str(), node_data2[0].c_str(), response->result[0].c_str(), response->success);
+
+                    if (response->success)
                     {
                         //system("read -p 'Press Enter to continue...' var");
-                        if (verbose) ROS_WARN("[NavAssistant]: Adding new Arc between ING Nodes [%s] <-> [%s]", node_data[0].c_str(), node_data2[0].c_str());
+                        if (verbose) RCLCPP_WARN(get_logger(), "[NavAssistant]: Adding new Arc between ING Nodes [%s] <-> [%s]", node_data[0].c_str(), node_data2[0].c_str());
                         //Create Arc
-                        topology_graph::graph srv_call2;
-                        srv_call2.request.cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
-                        srv_call2.request.params.clear();
-                        srv_call2.request.params.push_back(node_data[0]);
-                        srv_call2.request.params.push_back(node_data2[0]);
-                        srv_call2.request.params.push_back("arc");
-                        srv_call2.request.params.push_back("arc");
-                        srv_call2.request.params.push_back("true");       // bidirectional arc
-                        graph_srv_client.call(srv_call2);
-                        if (!srv_call2.response.success)
-                            ROS_WARN("[NavAssistant]: Unable to create Arc");
+                        topology_graph::srv::Graph::Request::SharedPtr addArcRequest;
+                        addArcRequest->cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
+                        addArcRequest->params.clear();
+                        addArcRequest->params.push_back(node_data[0]);
+                        addArcRequest->params.push_back(node_data2[0]);
+                        addArcRequest->params.push_back("arc");
+                        addArcRequest->params.push_back("arc");
+                        addArcRequest->params.push_back("true");       // bidirectional arc
+                        auto future = graph_srv_client->async_send_request(distanceRequest);
+                        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+                        auto response = future.get().get();
+
+                        if (!response->success)
+                            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create Arc");
                     }
                 }
             }
@@ -614,20 +691,24 @@ void CNavAssistant::regenerate_arcs()
 
 bool CNavAssistant::deleteNode(std::string node_type, double pose_x, double pose_y, double pose_yaw)
 {
-    if (verbose) ROS_INFO("[NavAssistant] Deleting Node of type [%s], close to [%.3f, %.3f]", node_type.c_str(), pose_x, pose_y );
+    if (verbose) 
+        RCLCPP_INFO(get_logger(), "[NavAssistant] Deleting Node of type [%s], close to [%.3f, %.3f]", node_type.c_str(), pose_x, pose_y );
     //1. Get all Nodes of type: node_type
-    topology_graph::graph srv_call;
-    srv_call.request.cmd = "GetNodesbyType";    // params: [node_type]
-    srv_call.request.params.push_back(node_type);
-    graph_srv_client.call(srv_call);
+    topology_graph::srv::Graph::Request::SharedPtr getNodesRequest;
+    getNodesRequest->cmd = "GetNodesbyType";    // params: [node_type]
+    getNodesRequest->params.push_back(node_type);
+    
+    auto future = graph_srv_client->async_send_request(getNodesRequest);
+    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+    auto response = future.get().get();
 
-    if (srv_call.response.success)
+    if (response->success)
     {
         double min_dist;
         std::string node_label_to_delete = "";
 
         //1. Get closest node (euclidean dist)
-        for (std::string n : srv_call.response.result)
+        for (std::string n : response->result)
         {
             // Node data = "id label type x y yaw"
             std::vector<std::string> node_data;
@@ -649,27 +730,31 @@ bool CNavAssistant::deleteNode(std::string node_type, double pose_x, double pose
         }
 
         //2. Delete all the nodes matching this label (nodes of all types!)
-        if (verbose) ROS_INFO("[NavAssistant] Deleting Nodes with label %s", node_label_to_delete.c_str() );
-        topology_graph::graph srv_call2;
-        srv_call2.request.cmd = "GetNodesbyLabel";    // params: [node_label]
-        srv_call2.request.params.push_back( node_label_to_delete );
-        graph_srv_client.call(srv_call2);
+        if (verbose) 
+            RCLCPP_INFO(get_logger(), "[NavAssistant] Deleting Nodes with label %s", node_label_to_delete.c_str() );
+        topology_graph::srv::Graph::Request::SharedPtr matchNodesRequest;
+        matchNodesRequest->cmd = "GetNodesbyLabel";    // params: [node_label]
+        matchNodesRequest->params.push_back( node_label_to_delete );
+        
+        auto future = graph_srv_client->async_send_request(matchNodesRequest);
+        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto matchResponse = future.get().get();
 
-        if (srv_call2.response.success)
+        if (matchResponse->success)
         {
-            topology_graph::graph srv_call3;
+            topology_graph::srv::Graph::Request::SharedPtr deleteRequest;
             // for each node with the matching label (delete it)
-            for (std::string n : srv_call2.response.result)
+            for (std::string n : matchResponse->result)
             {
                 // Node data = "id label type x y yaw"
                 std::vector<std::string> node_data;
                 node_data.clear();
                 boost::split(node_data, n, boost::is_any_of(" "));
 
-                srv_call3.request.cmd = "DeleteNodeById";    // params: node_id
-                srv_call3.request.params.clear();
-                srv_call3.request.params.push_back( node_data[0] );
-                graph_srv_client.call(srv_call3);
+                deleteRequest->cmd = "DeleteNodeById";    // params: node_id
+                deleteRequest->params.clear();
+                deleteRequest->params.push_back( node_data[0] );
+                auto future = graph_srv_client->async_send_request(matchNodesRequest);
             }
         }
     }
@@ -682,25 +767,23 @@ bool CNavAssistant::deleteNode(std::string node_type, double pose_x, double pose
 // ----------------------------------
 // Navigation Assistant srv handler -
 // ----------------------------------
-bool CNavAssistant::srvCB(navigation_assistant::nav_assistant_point::Request &req, navigation_assistant::nav_assistant_point::Response &res)
+bool CNavAssistant::srvCB(NAS::NavAssistantPoint::Request::SharedPtr req, NAS::NavAssistantPoint::Response::SharedPtr res)
 {
     // This SRV implements functions to Add or Delete node nodes in the graph (topology)
     // Get Yaw from Pose
-    tf::Pose tfpose;
-    tf::poseMsgToTF(req.pose.pose, tfpose);
-    double yaw_angle = tf::getYaw(tfpose.getRotation());
+    double yaw_angle = getYaw(req->pose.pose);
 
     // Add / Delete
-    if (req.action == "add")
+    if (req->action == "add")
     {
         // Set a new label
-        std::string label = req.type + "_" + std::to_string(counter);
+        std::string label = req->type + "_" + std::to_string(counter);
         counter ++;
 
         // Execute action and return result
-        if ( addNode(label, req.type, req.pose.pose.position.x, req.pose.pose.position.y, yaw_angle) )
+        if ( addNode(label, req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle) )
         {
-            if (req.type == "CP" || req.type == "CNP" || req.type == "passage")
+            if (req->type == "CP" || req->type == "CNP" || req->type == "passage")
                 regenerate_arcs();
             return true;
         }
@@ -708,33 +791,37 @@ bool CNavAssistant::srvCB(navigation_assistant::nav_assistant_point::Request &re
             return false;
 
     }
-    else if (req.action == "delete")
+    else if (req->action == "delete")
     {
-        if (verbose) ROS_INFO("[NavAssistant] Request to Delete a Node," );
-        if ( deleteNode(req.type, req.pose.pose.position.x, req.pose.pose.position.y, yaw_angle) )
+        if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Delete a Node," );
+        if ( deleteNode(req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle) )
         {
-            if (req.type == "CP" || req.type == "CNP" || req.type == "passage")
+            if (req->type == "CP" || req->type == "CNP" || req->type == "passage")
                 regenerate_arcs();
             return true;
         }
         else
             return false;
     }
-    else if (req.action == "save")
+    else if (req->action == "save")
     {
         // Keep copy of current Graph
         if (save_to_file != "")
         {
             // Save to file
-            ROS_INFO("[NavAssistant] Saving Graph to file [%s]", save_to_file.c_str());
+            RCLCPP_INFO(get_logger(), "[NavAssistant] Saving Graph to file [%s]", save_to_file.c_str());
             //File contains a boost::graphviz description of the nodes and arcs
-            topology_graph::graph srv_call2;
-            srv_call2.request.cmd = "SaveGraph";    // params: [file_path]
-            srv_call2.request.params.clear();
-            srv_call2.request.params.push_back(save_to_file);
-            graph_srv_client.call(srv_call2);
-            if (!srv_call2.response.success)
-                ROS_WARN("[NavAssistant]: Unable to Save Graph from file. Skipping.");
+            topology_graph::srv::Graph::Request::SharedPtr saveRequest;
+            saveRequest->cmd = "SaveGraph";    // params: [file_path]
+            saveRequest->params.clear();
+            saveRequest->params.push_back(save_to_file);
+                
+            auto future = graph_srv_client->async_send_request(saveRequest);
+            auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+            auto response = future.get().get();
+
+            if (!response->success)
+                RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to Save Graph from file. Skipping.");
             return true;
         }
         else
@@ -748,28 +835,31 @@ bool CNavAssistant::srvCB(navigation_assistant::nav_assistant_point::Request &re
 // ----------------------------------
 // Turn in place before Navigation  -
 // ----------------------------------
-void CNavAssistant::turn_towards_path(geometry_msgs::PoseStamped pose_goal)
+void CNavAssistant::turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal)
 {
     // Use move_base service "make_plan" to set initial orientation
-    nav_msgs::GetPlan mb_srv;
+    nav_msgs::srv::GetPlan::Request::SharedPtr getPlanReq;
 
     // 1. Set starting pose (robot location)
-    mb_srv.request.start.header.frame_id = "map";
-    mb_srv.request.start.header.stamp = ros::Time::now();
-    mb_srv.request.start.pose = current_robot_pose.pose.pose;
+    getPlanReq->start.header.frame_id = "map";
+    getPlanReq->start.header.stamp = now();
+    getPlanReq->start.pose = current_robot_pose.pose.pose;
     // Set Goal pose
-    mb_srv.request.goal = pose_goal;
+    getPlanReq->goal = pose_goal;
 
+    auto future = mb_srv_client->async_send_request(getPlanReq);
+    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+    auto response = future.get().get();
     //Check if valid goal with move_base srv
-    if( !mb_srv_client.call(mb_srv) )
+    if( result != rclcpp::FutureReturnCode::SUCCESS )
     {
         // SRV is not available!! Report Error
-        ROS_ERROR("[NavAssistant-turn_towards_path] Unable to call MAKE_PLAN service from MoveBase");
+        RCLCPP_ERROR(get_logger(), "[NavAssistant-turn_towards_path] Unable to call MAKE_PLAN service from MoveBase");
         return;
     }
-    else if ( mb_srv.response.plan.poses.empty() )
+    else if ( response->plan.poses.empty() )
     {
-        if (verbose) ROS_WARN("[NavAssistant-turn_towards_path] Unable to get plan");
+        if (verbose) RCLCPP_WARN(get_logger(), "[NavAssistant-turn_towards_path] Unable to get plan");
         return;
     }
     else
@@ -778,26 +868,26 @@ void CNavAssistant::turn_towards_path(geometry_msgs::PoseStamped pose_goal)
         {
             // get initial orientation of path from vector<pose>
             double Ax, Ay, d = 0.0;
-            geometry_msgs::Pose p;
-            p = mb_srv.response.plan.poses[mb_srv.response.plan.poses.size()-1].pose;     //init at goal
-            for (size_t h=0; h<mb_srv.response.plan.poses.size(); h++)
+            geometry_msgs::msg::Pose p;
+            p = response->plan.poses[response->plan.poses.size()-1].pose;     //init at goal
+            for (size_t h=0; h<response->plan.poses.size(); h++)
             {
                 if (h==0)
                 {
-                    Ax = mb_srv.request.start.pose.position.x - mb_srv.response.plan.poses[h].pose.position.x;
-                    Ay = mb_srv.request.start.pose.position.y - mb_srv.response.plan.poses[h].pose.position.y;
+                    Ax = getPlanReq->start.pose.position.x - response->plan.poses[h].pose.position.x;
+                    Ay = getPlanReq->start.pose.position.y - response->plan.poses[h].pose.position.y;
                 }
                 else
                 {
-                    Ax = mb_srv.response.plan.poses[h-1].pose.position.x - mb_srv.response.plan.poses[h].pose.position.x;
-                    Ay = mb_srv.response.plan.poses[h-1].pose.position.y - mb_srv.response.plan.poses[h].pose.position.y;
+                    Ax = response->plan.poses[h-1].pose.position.x - response->plan.poses[h].pose.position.x;
+                    Ay = response->plan.poses[h-1].pose.position.y - response->plan.poses[h].pose.position.y;
                 }
                 d += sqrt( pow(Ax,2) + pow(Ay,2) );
 
                 //end condition [m]
                 if (d >= 0.3)
                 {
-                    p = mb_srv.response.plan.poses[h].pose;
+                    p = response->plan.poses[h].pose;
                     break;
                 }
             }
@@ -808,13 +898,13 @@ void CNavAssistant::turn_towards_path(geometry_msgs::PoseStamped pose_goal)
             double target_yaw_map = atan2(Ay,Ax);
 
             // Set goal in MoveBase
-            geometry_msgs::PoseStamped local_goal;
+            geometry_msgs::msg::PoseStamped local_goal;
             local_goal.header = current_robot_pose.header;
             local_goal.pose.position = current_robot_pose.pose.pose.position;
-            tf::Quaternion q;
+            tf2::Quaternion q;
             q.setRPY(0, 0, angles::normalize_angle(target_yaw_map));
-            tf::quaternionTFToMsg(q, local_goal.pose.orientation);
-            if (verbose) ROS_INFO("[NavAssistant] Requesting Initial Turn" );
+            local_goal.pose.orientation = tf2::toMsg(q);
+            if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Requesting Initial Turn" );
 
             // Call MoveBase (turn in place)
             move_base_nav_and_wait(local_goal);
@@ -823,7 +913,7 @@ void CNavAssistant::turn_towards_path(geometry_msgs::PoseStamped pose_goal)
         }
         catch (exception e)
         {
-            ROS_ERROR("[taskCoordinator] Error in turn_towards_path: [%s]", e.what());
+            RCLCPP_ERROR(get_logger(), "[taskCoordinator] Error in turn_towards_path: [%s]", e.what());
             return;
         }
     }
@@ -837,41 +927,24 @@ bool CNavAssistant::move_base_cancel_and_wait(double wait_time_sec)
 {
     try
     {
-        if (mb_action_client.getState() == actionlib::SimpleClientGoalState::ACTIVE)
-        {
-            ros::Time start_time = ros::Time::now();
+        rclcpp::Time start_time = now();
 
-            // Request goal cancelation (asincronous)
-            mb_action_client.cancelAllGoals();
+        // Request goal cancelation (asincronous)
+        auto future = mb_action_client->async_cancel_all_goals();
 
-            //Wait for action server to get state PREEMPTED or timeout
-            while (mb_action_client.getState() == actionlib::SimpleClientGoalState::ACTIVE)
-            {
-                if (verbose) ROS_INFO("[NavAssistant-CancelActionAndWait] Waiting for ActionServer to Cancel the goal");
-
-                //check if timeout
-                if( (ros::Time::now() - start_time).toSec() > wait_time_sec )
-                {
-                    if (verbose) ROS_INFO("[NavAssistant-CancelActionAndWait] Timeout Reached...");
-                    return false;
-                }
-
-                //Sleep a while
-                ros::Duration(0.2).sleep();
-            }
-
-            // Action server is now in state PREEMPTED/SUCCESS/ABORTED but not Active!
+        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+        
+        if(result == rclcpp::FutureReturnCode::SUCCESS)
             return true;
-        }
         else
         {
-            if (verbose) ROS_INFO("[NavAssistant-CancelActionAndWait] AS is not ACTIVE... skipping request");
-            return true;
+            RCLCPP_ERROR(get_logger(), "Goal could not be canceled");
+            return false;
         }
     }
     catch (exception e)
     {
-        ROS_ERROR("[taskCoordinator-CancelActionAndWait] Exception: [%s]", e.what());
+        RCLCPP_ERROR(get_logger(), "[taskCoordinator-CancelActionAndWait] Exception: [%s]", e.what());
         return false;
     }
 }
@@ -881,74 +954,113 @@ bool CNavAssistant::move_base_cancel_and_wait(double wait_time_sec)
 // ----------------------------------------
 // Trigger Navigation and wait completion -
 // ----------------------------------------
-void CNavAssistant::move_base_nav_and_wait(geometry_msgs::PoseStamped pose_goal)
+void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_goal)
 {
     // request MoveBase to reach a goal
-    move_base_msgs::MoveBaseGoal mb_goal;
-    mb_goal.target_pose = pose_goal;
-    mb_goal.target_pose.header.frame_id="map";
-    if (verbose) ROS_INFO("[NavAssistant] Requesting MoveBase Navigation to [%.2f, %.2f]", mb_goal.target_pose.pose.position.x, mb_goal.target_pose.pose.position.y );
-    mb_action_client.sendGoal(mb_goal);
+    NavToPose::Goal mb_goal;
+    mb_goal.pose = pose_goal;
+    mb_goal.pose.header.frame_id="map";
+    if (verbose) 
+        RCLCPP_INFO(get_logger(), "[NavAssistant] Requesting MoveBase Navigation to [%.2f, %.2f]", mb_goal.pose.pose.position.x, mb_goal.pose.pose.position.y );
+    
 
-    // Execute Navigation without blocking!
-    while ( !mb_action_client.waitForResult(ros::Duration(2.0)) )
+    auto static result_cb = [&](const rclcpp_action::ClientGoalHandle<NavToPose>::WrappedResult& result)
     {
-        // Check that preempt has not been requested by the client (that is, canceled)
-        if (as_.isPreemptRequested() || !ros::ok())
-        {
-            ROS_WARN("[NavAssistant-MoveBaseNav]: has been Preempted");
-            mb_action_client.cancelAllGoals();
+        switch (result.code) {
+        case rclcpp_action::ResultCode::SUCCEEDED:
+            RCLCPP_INFO(this->get_logger(), "NavToPose Goal was completed");
+            return;
+        case rclcpp_action::ResultCode::ABORTED:
+            RCLCPP_ERROR(this->get_logger(), "NavToPose Goal was aborted");
+            return;
+        case rclcpp_action::ResultCode::CANCELED:
+            RCLCPP_ERROR(this->get_logger(), "NavToPose Goal was canceled");
+            return;
+        default:
+            RCLCPP_ERROR(this->get_logger(), "NavToPose Unknown result code");
             return;
         }
-    }
-
-    if (verbose) ROS_INFO("[NavAssistant] MoveBase navigation has finished in state [%s]", mb_action_client.getState().toString().c_str() );
+    };
+    
+    auto goal_options = rclcpp_action::Client<NavToPose>::SendGoalOptions();
+    goal_options.result_callback = result_cb;
+    
+    auto future = mb_action_client->async_send_goal(mb_goal);
+    rclcpp::spin_until_future_complete(shared_from_this(), future);
 }
-
 
 
 //=================================================================
 // Action Server Callback -> New Goal for the NavAssistant (START!)
 //=================================================================
-void CNavAssistant::executeAS(const navigation_assistant::nav_assistantGoalConstPtr &goal)
+rclcpp_action::GoalResponse CNavAssistant::handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const NAS_ac::NavAssistant::Goal> goal)
+{
+    RCLCPP_INFO(this->get_logger(), "Received goal request");
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse CNavAssistant::handle_cancel( const std::shared_ptr<GoalHandleNavigate_Server> goal_handle)
+{
+    RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
+    goalCancelled = true;
+    m_activeGoal = {nullptr};
+    mb_action_client->async_cancel_all_goals();
+    return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void CNavAssistant::handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle)
+{
+    m_activeGoal=goal_handle->get_goal();
+}
+
+void CNavAssistant::execute()
 {
     // This ActionServer is a wrapper for move_base aiming at a more robust navvigation and error handling
     try
     {
-        if (verbose) ROS_INFO("[NavAssistant] Starting Navigation Assistant to reach: [%.2f, %.2f]", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
-        result_.trace = "";
-
+        auto goal = m_activeGoal;
+        m_activeGoal = {nullptr};
+        if (verbose) 
+            RCLCPP_INFO(get_logger(), "[NavAssistant] Starting Navigation Assistant to reach: [%.2f, %.2f]", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
+        
         // Get path (robot->goal) from topology-graph node
         std::string node_start, node_end;
         std::vector<std::string> path;
 
         //1. Get starting ING node
-        topology_graph::graph srv_call;
-        srv_call.request.cmd = "GetClosestNode";    // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
-        srv_call.request.params.push_back(std::to_string(current_robot_pose.pose.pose.position.x));
-        srv_call.request.params.push_back(std::to_string(current_robot_pose.pose.pose.position.y));
-        srv_call.request.params.push_back(std::to_string(0.0));
-        srv_call.request.params.push_back("ING");
-        graph_srv_client.call(srv_call);
-        if (srv_call.response.success)
+        topology_graph::srv::Graph::Request::SharedPtr graphRequest;
+        graphRequest->cmd = "GetClosestNode";    // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
+        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.pose.position.x));
+        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.pose.position.y));
+        graphRequest->params.push_back(std::to_string(0.0));
+        graphRequest->params.push_back("ING");
+        
+        auto future = graph_srv_client->async_send_request(graphRequest);
+        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto response = future.get().get();
+
+        if (response->success)
         {
-            node_start = srv_call.response.result[0];                // result: [id label type x y yaw]
-            if (verbose) ROS_INFO("[NavAssistant]: Starting Node is %s - %s", node_start.c_str(), srv_call.response.result[1].c_str() );
+            node_start = response->result[0];                // result: [id label type x y yaw]
+            if (verbose) 
+                RCLCPP_INFO(get_logger(), "[NavAssistant]: Starting Node is %s - %s", node_start.c_str(), response->result[1].c_str() );
 
 
             // 2. Get ending ING node
-            srv_call.request.cmd = "GetClosestNode";    // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
-            srv_call.request.params.clear();
-            srv_call.response.result.clear();
-            srv_call.request.params.push_back(std::to_string(goal->target_pose.pose.position.x));
-            srv_call.request.params.push_back(std::to_string(goal->target_pose.pose.position.y));
-            srv_call.request.params.push_back(std::to_string(0.0));
-            srv_call.request.params.push_back("ING");
-            graph_srv_client.call(srv_call);
-            if (srv_call.response.success)
+            graphRequest->cmd = "GetClosestNode";    // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
+            graphRequest->params.clear();
+            response->result.clear();
+            graphRequest->params.push_back(std::to_string(goal->target_pose.pose.position.x));
+            graphRequest->params.push_back(std::to_string(goal->target_pose.pose.position.y));
+            graphRequest->params.push_back(std::to_string(0.0));
+            graphRequest->params.push_back("ING");
+            future = graph_srv_client->async_send_request(graphRequest);
+            result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+            response = future.get().get();
+            if (response->success)
             {
-                node_end = srv_call.response.result[0];                // result: [id label type x y yaw]
-                if (verbose) ROS_INFO("[NavAssistant]: End Node is %s -%s", node_end.c_str(), srv_call.response.result[1].c_str() );
+                node_end = response->result[0];                // result: [id label type x y yaw]
+                if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant]: End Node is %s -%s", node_end.c_str(), response->result[1].c_str() );
 
                 // Navigation to Intermediate Navigation Goals (ING) if any
                 if (node_start != node_end)
@@ -956,19 +1068,21 @@ void CNavAssistant::executeAS(const navigation_assistant::nav_assistantGoalConst
                     // Find Path
                     // params: [nodeID_start, nodeID_end]
                     // result: Success/Failure. On success the list of Nodes ["id1 label1 type1 x1 y1 yaw", ..., ""idN labelN typeN xN yN yawN"]
-                    srv_call.request.cmd = "FindPath";
-                    srv_call.request.params.clear();
-                    srv_call.response.result.clear();
-                    srv_call.request.params.push_back(node_start);
-                    srv_call.request.params.push_back(node_end);
-                    graph_srv_client.call(srv_call);
-                    if (srv_call.response.success)
+                    graphRequest->cmd = "FindPath";
+                    graphRequest->params.clear();
+                    response->result.clear();
+                    graphRequest->params.push_back(node_start);
+                    graphRequest->params.push_back(node_end);
+                    future = graph_srv_client->async_send_request(graphRequest);
+                    result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+                    response = future.get().get();
+                    if (response->success)
                     {
-                        path = srv_call.response.result;
+                        path = response->result;
                         if (verbose)
                         {
                             for (auto n : path)
-                                ROS_INFO("[NavAssistant]: %s", n.c_str());
+                                RCLCPP_INFO(get_logger(), "[NavAssistant]: %s", n.c_str());
                         }
 
                         try
@@ -1001,9 +1115,9 @@ void CNavAssistant::executeAS(const navigation_assistant::nav_assistantGoalConst
                                 boost::split(current_node_data, path[i], boost::is_any_of(" "));
 
                                 // Set i_goal
-                                geometry_msgs::PoseStamped i_goal;
+                                geometry_msgs::msg::PoseStamped i_goal;
                                 i_goal.header.frame_id = "map";
-                                i_goal.header.stamp = ros::Time(0);
+                                i_goal.header.stamp = rclcpp::Time(0);
                                 i_goal.pose.position.x = atof(current_node_data[3].c_str());
                                 i_goal.pose.position.y = atof(current_node_data[4].c_str());
                                 i_goal.pose.position.z = 0.0;
@@ -1025,52 +1139,33 @@ void CNavAssistant::executeAS(const navigation_assistant::nav_assistantGoalConst
                                     target_yaw_map = atan2(Ay,Ax);
                                 }
                                 // Set orientation
-                                tf::Quaternion q;
+                                tf2::Quaternion q;
                                 q.setRPY(0, 0, angles::normalize_angle(target_yaw_map));
-                                tf::quaternionTFToMsg(q, i_goal.pose.orientation);
+                                i_goal.pose.orientation = tf2::toMsg(q);
 
 
                                 //A. Initial Turn
                                 if (goal->turn_before_nav)
                                     turn_towards_path(i_goal);
 
-                                if (as_.isPreemptRequested() || !ros::ok())
-                                {
-                                    ROS_WARN("[NavAssistant]: has been Preempted");
-                                    // set the action state to preempted
-                                    result_.trace += " - Preemted";
-                                    as_.setPreempted(result_);
-                                    close_and_return();
+                                if(checkIfCancelled())
                                     return;
-                                }
 
                                 //B. Navigate to i_goal using MOVE_BASE!
                                 move_base_nav_and_wait(i_goal);
-
-                                if (as_.isPreemptRequested() || !ros::ok())
-                                {
-                                    ROS_WARN("[NavAssistant]: has been Preempted");
-                                    // set the action state to preempted
-                                    result_.trace += " - Preemted";
-                                    as_.setPreempted(result_);
-                                    close_and_return();
+                                if(checkIfCancelled())
                                     return;
-                                }
                             }
                         }
                         catch (exception e)
                         {
-                            ROS_ERROR("[NavAssistant] Exception while navigating through path: %s\n", e.what());
-                            result_.trace += " - Exception";
-                            as_.setAborted(result_);
+                            RCLCPP_ERROR(get_logger(), "[NavAssistant] Exception while navigating through path: %s\n", e.what());
                             close_and_return();
                             return;
                         }
                         catch (...)
                         {
-                            ROS_ERROR("[NavAssistant] Unknown Exception while navigating through path");
-                            result_.trace += " - Exception";
-                            as_.setAborted(result_);
+                            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unknown Exception while navigating through path");
                             close_and_return();
                             return;
                         }
@@ -1078,16 +1173,15 @@ void CNavAssistant::executeAS(const navigation_assistant::nav_assistantGoalConst
                     else
                     {
                         if(verbose)
-                            ROS_WARN("[NavAssistant]: Unable to get Path. Trying direct navigation.");
-                        result_.trace += " - Unable to get Path";
+                            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Path. Trying direct navigation.");
                     }
                 } //end if-start!=end
             }
             else if (verbose)
-                ROS_WARN("[NavAssistant]: Unable to get Closest ING Node (end) pose=[%.3f, %.3f]. Trying direct navigation.", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
+                RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Closest ING Node (end) pose=[%.3f, %.3f]. Trying direct navigation.", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
         }
         else if (verbose)
-            ROS_WARN("[NavAssistant]: Unable to get Closest ING Node (start) pose=[%.3f, %.3f]. Trying direct navigation.", current_robot_pose.pose.pose.position.x, current_robot_pose.pose.pose.position.y );
+            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Closest ING Node (start) pose=[%.3f, %.3f]. Trying direct navigation.", current_robot_pose.pose.pose.position.x, current_robot_pose.pose.pose.position.y );
 
 
 
@@ -1097,65 +1191,31 @@ void CNavAssistant::executeAS(const navigation_assistant::nav_assistantGoalConst
         //1. Initial Turn
         if (goal->turn_before_nav)
             turn_towards_path(goal->target_pose);
-
-        ros::Duration(0.2).sleep();
-        if (as_.isPreemptRequested() || !ros::ok())
-        {
-            ROS_WARN("[NavAssistant]: has been Preempted");
-            // set the action state to preempted
-            result_.trace += " - Preemted";
-            as_.setPreempted(result_);
-            close_and_return();
+        
+        if(checkIfCancelled())
             return;
-        }
+        rclcpp::sleep_for(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(0.2)));
 
+        if(checkIfCancelled())
+            return;
         //2. Navigate to goal
         move_base_nav_and_wait(goal->target_pose);
-
-        if (as_.isPreemptRequested() || !ros::ok())
-        {
-            ROS_WARN("[NavAssistant]: has been Preempted");
-            // set the action state to preempted
-            result_.trace += " - Preemted";
-            as_.setPreempted(result_);
-            close_and_return();
-            return;
-        }
-
-        // 3. Check Result
-        if (mb_action_client.getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
-        {
-            result_.trace += " - MoveBase Succeeded";
-            as_.setSucceeded(result_);
-            close_and_return();
-            return;
-        }
-        else
-        {
-            result_.trace += " - MoveBase Failed";
-            as_.setAborted(result_);
-            close_and_return();
-            return;
-        }
     }
 
     catch (exception e)
     {
-        ROS_ERROR("[NavAssistant] Exception while executting AS: %s\n", e.what());
-        result_.trace += " - Exception";
-        as_.setAborted(result_);
+        RCLCPP_ERROR(get_logger(), "[NavAssistant] Exception while executting AS: %s\n", e.what());
         close_and_return();
         return;
     }
     catch (...)
     {
-        ROS_ERROR("[NavAssistant] Unknown Exception in AS");
-        result_.trace += " - Exception";
-        as_.setAborted(result_);
+        RCLCPP_ERROR(get_logger(), "[NavAssistant] Unknown Exception in AS");
         close_and_return();
         return;
     }
 }
+
 
 
 
@@ -1168,15 +1228,12 @@ void CNavAssistant::close_and_return()
     move_base_cancel_and_wait(5.0);
 
     // Stop the robot (manually)
-    geometry_msgs::Twist stop;
+    geometry_msgs::msg::Twist stop;
     stop.linear.x = stop.linear.y = stop.linear.z = 0.0;
     stop.angular.z = 0.0;
-    cmd_vel_publisher.publish(stop);
+    cmd_vel_publisher->publish(stop);
 
-    if (verbose) ROS_INFO("[NavAssistant] Closing Action...");
-    ros::Duration(0.1).sleep();
-
-
+    if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Closing Action...");
 }
 
 CNavAssistant::~CNavAssistant(){}
@@ -1186,13 +1243,17 @@ CNavAssistant::~CNavAssistant(){}
 //===================================================================================
 int main(int argc, char** argv)
 {
-    ros::init(argc,argv,"navigation_asssistant_node");
+    rclcpp::init(argc,argv);
 
-    CNavAssistant nav_assistant("nav_assistant");
-    ROS_INFO("[NavAssistant] Action server is ready for action!...");
+    std::shared_ptr<CNavAssistant> nav_assistant = std::make_shared<CNavAssistant>("nav_assistant");
+    RCLCPP_INFO(nav_assistant->get_logger(), "[NavAssistant] Action server is ready for action!...");
 
-    ros::spin();
+    while(rclcpp::ok())
+    {
+        rclcpp::spin_some(nav_assistant);
+        if(nav_assistant->m_activeGoal.get() != nullptr)
+            nav_assistant->execute();
+    }
 
     return 0;
 }
-
