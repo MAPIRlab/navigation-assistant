@@ -1,5 +1,5 @@
 #include "set_point_of_interest_tool.h"
-#include <navigation_assistant/srv/nav_assistant_point.hpp>
+#include <nav_assistant_msgs/srv/nav_assistant_point.hpp>
 
 
 #include <rviz_common/viewport_mouse_event.hpp>
@@ -16,14 +16,14 @@
 #include <OgreSceneManager.h>
 #include <OgreEntity.h> 
 
-namespace POI
+namespace rviz_nav_assistant
 {
 
     SetPointOfInterestTool::SetPointOfInterestTool() : Node("NavAssistantPOITool")
     {
         // Set shorcut key
         shortcut_key_ = 'p';
-        nav_assist_srv_client = create_client<navigation_assistant::srv::NavAssistantPoint>("/navigation_assistant/add_point_of_interest");
+        nav_assist_srv_client = create_client<nav_assistant_msgs::srv::NavAssistantPoint>("/navigation_assistant/add_point_of_interest");
         shift_down = false;
     }
 
@@ -50,7 +50,7 @@ namespace POI
             else if ( event->key() == Qt::Key_Enter || event->key() == Qt::Key_Return)
             {
                 //Save graph
-                navigation_assistant::srv::NavAssistantPoint::Request::SharedPtr request;
+                nav_assistant_msgs::srv::NavAssistantPoint::Request::SharedPtr request;
                 request->action = "save";
                 auto future = nav_assist_srv_client->async_send_request(request);
             }
@@ -77,7 +77,7 @@ namespace POI
             Ogre::Plane ground_plane( Ogre::Vector3::UNIT_Z, 0.0f );
             if( context_->getViewPicker()->get3DPoint(event.panel, event.x, event.y, intersection))
             {
-                navigation_assistant::srv::NavAssistantPoint::Request::SharedPtr request;
+                nav_assistant_msgs::srv::NavAssistantPoint::Request::SharedPtr request;
                 if (event.shift())
                     request->action = "delete";
                 else
@@ -99,7 +99,7 @@ namespace POI
             Ogre::Plane ground_plane( Ogre::Vector3::UNIT_Z, 0.0f );
             if( context_->getViewPicker()->get3DPoint(event.panel, event.x, event.y, intersection) )
             {
-                navigation_assistant::srv::NavAssistantPoint::Request::SharedPtr request;
+                nav_assistant_msgs::srv::NavAssistantPoint::Request::SharedPtr request;
                 if (event.shift())
                     request->action = "delete";
                 else
@@ -123,4 +123,4 @@ namespace POI
 
 
 #include <pluginlib/class_list_macros.hpp>
-PLUGINLIB_EXPORT_CLASS(POI::SetPointOfInterestTool, rviz_common::Tool )
+PLUGINLIB_EXPORT_CLASS(rviz_nav_assistant::SetPointOfInterestTool, rviz_common::Tool )

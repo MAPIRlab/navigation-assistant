@@ -32,7 +32,7 @@ double getYaw(const geometry_msgs::msg::Pose& pose)
 //-----------------------------------------------------------
 //                    Action Server Initialization
 //----------------------------------------------------------
-CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant Server")
+CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server")
 {
     /*! IMPORTANT
      * DEFINE all Action Servers to be used or published before executing the callback to avoid problems
@@ -59,7 +59,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant Server")
 
     // Service clients
     mb_action_client = rclcpp_action::create_client<NavToPose>(this, "navigate_to_pose");
-    mb_srv_client = create_client<nav_msgs::srv::GetPlan>("/move_base/NavfnROS/make_plan");  // only accounts for global_costmap but works at all times
+    getPlanClient = rclcpp_action::create_client<GetPlan>(this, "compute_path_to_pose");  // only accounts for global_costmap but works at all times
     graph_srv_client = create_client<topology_graph::srv::Graph>("topology_graph/graph");    // Graph service client
     nav_assist_functions_client_POI = create_client<NAS::NavAssistantPOI>("navigation_assistant/get_poi_related_poses");
     nav_assist_functions_client_CNP = create_client<NAS::NavAssistantSetCNP>("navigation_assistant/get_cnp_pose_around");
@@ -74,15 +74,15 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant Server")
     {
         using namespace std::chrono_literals;
         // WAITs
-        while (!mb_action_client->wait_for_action_server(30s))
+        while (rclcpp::ok() && !mb_action_client->wait_for_action_server(10s))
             RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with MoveBase serer! waiting...");
-        while (!mb_srv_client->wait_for_service(30s) )
+        while (rclcpp::ok() && !getPlanClient->wait_for_action_server(10s) )
             RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with MoveBase make_plan srv! waiting...");
-        while (!graph_srv_client->wait_for_service(30s) )
+        while (rclcpp::ok() && !graph_srv_client->wait_for_service(10s) )
             RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with the GRAPH srv! waiting...");
-        while (!nav_assist_functions_client_POI->wait_for_service(30s) )
+        while (rclcpp::ok() && !nav_assist_functions_client_POI->wait_for_service(10s) )
             RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with the navigation_assistant functions srv! waiting...");
-        while (!nav_assist_functions_client_CNP->wait_for_service(30s) )
+        while (rclcpp::ok() && !nav_assist_functions_client_CNP->wait_for_service(10s) )
             RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with the navigation_assistant functions srv! waiting...");
 
     }
@@ -145,23 +145,24 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant Server")
 
 bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::MakePlan::Response::SharedPtr response)
 {
-    nav_msgs::srv::GetPlan::Request::SharedPtr mb_request;
+    GetPlan::Goal mb_request;
 
-    // 1. Set starting pose (robot location)
-    mb_request->start.header.frame_id = "map";
-    mb_request->start.header.stamp = now();
-    mb_request->start.pose = current_robot_pose.pose.pose;
-    // Set Goal pose
+    mb_request.start = request->start;
+    mb_request.goal = request->goal;
 
-    mb_request->goal.header.frame_id = "map";
-    mb_request->goal.header.stamp = now();
-    mb_request->goal.pose.position.x = request->x;
-    mb_request->goal.pose.position.y = request->y;
-    mb_request->goal.pose.position.z = request->z;
 
-    auto future = mb_srv_client->async_send_request(mb_request); 
+    nav_msgs::msg::Path plan;
+    static auto result_cb = [&](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult w_result)
+    {
+        plan = w_result.result->path;
+    };
+
+    auto goal_options = rclcpp_action::Client<GetPlan>::SendGoalOptions();
+    goal_options.result_callback = result_cb;
+    
+    auto future = getPlanClient->async_send_goal(mb_request, goal_options); 
     auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-    auto mb_response = future.get().get();
+
     //Check if valid goal with move_base srv
     if( result != rclcpp::FutureReturnCode::SUCCESS )
     {
@@ -170,7 +171,7 @@ bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::Mak
         response->valid_path = false;
         return false;
     }
-    else if ( mb_response->plan.poses.empty() )
+    else if (plan.poses.empty() )
     {
         if (verbose) RCLCPP_WARN(get_logger(), "[NavAssistant-turn_towards_path] Unable to get plan");
         response->valid_path = false;
@@ -178,6 +179,7 @@ bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::Mak
     }
 
     response->valid_path = true;
+    response->plan = plan;
     return true;
 }
 
@@ -382,7 +384,7 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
     if (node_type == "passage")
     {
         // Estimate and Add the two Segment Points (SP) that define this passage
-        navigation_assistant::srv::NavAssistantPOI::Request::SharedPtr request;
+        NAS::NavAssistantPOI::Request::SharedPtr request;
         request->pose = node_pose;
 
         auto future = nav_assist_functions_client_POI->async_send_request(request);
@@ -838,20 +840,20 @@ bool CNavAssistant::srvCB(NAS::NavAssistantPoint::Request::SharedPtr req, NAS::N
 void CNavAssistant::turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal)
 {
     // Use move_base service "make_plan" to set initial orientation
-    nav_msgs::srv::GetPlan::Request::SharedPtr getPlanReq;
+    NAS::MakePlan::Request::SharedPtr getPlanReq;
+    NAS::MakePlan::Response::SharedPtr response;
 
-    // 1. Set starting pose (robot location)
     getPlanReq->start.header.frame_id = "map";
     getPlanReq->start.header.stamp = now();
     getPlanReq->start.pose = current_robot_pose.pose.pose;
     // Set Goal pose
     getPlanReq->goal = pose_goal;
+    
+    // 1. Set starting pose (robot location)
+    bool result = makePlan(getPlanReq, response);
 
-    auto future = mb_srv_client->async_send_request(getPlanReq);
-    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-    auto response = future.get().get();
     //Check if valid goal with move_base srv
-    if( result != rclcpp::FutureReturnCode::SUCCESS )
+    if(!result)
     {
         // SRV is not available!! Report Error
         RCLCPP_ERROR(get_logger(), "[NavAssistant-turn_towards_path] Unable to call MAKE_PLAN service from MoveBase");
@@ -956,6 +958,7 @@ bool CNavAssistant::move_base_cancel_and_wait(double wait_time_sec)
 // ----------------------------------------
 void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_goal)
 {
+    auto currentServerGoal = m_activeServerGoalHandle;
     // request MoveBase to reach a goal
     NavToPose::Goal mb_goal;
     mb_goal.pose = pose_goal;
@@ -963,9 +966,15 @@ void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_
     if (verbose) 
         RCLCPP_INFO(get_logger(), "[NavAssistant] Requesting MoveBase Navigation to [%.2f, %.2f]", mb_goal.pose.pose.position.x, mb_goal.pose.pose.position.y );
     
-
-    auto static result_cb = [&](const rclcpp_action::ClientGoalHandle<NavToPose>::WrappedResult& result)
+    auto static response_cb = [&](std::shared_ptr<NavToPoseClientGoalHandle> goal_handle)
     {
+        m_activeClientGoalHandle = goal_handle;
+    };
+
+    bool complete = false;
+    auto static result_cb = [&](const NavToPoseClientGoalHandle::WrappedResult& result)
+    {
+        complete = true;
         switch (result.code) {
         case rclcpp_action::ResultCode::SUCCEEDED:
             RCLCPP_INFO(this->get_logger(), "NavToPose Goal was completed");
@@ -984,9 +993,24 @@ void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_
     
     auto goal_options = rclcpp_action::Client<NavToPose>::SendGoalOptions();
     goal_options.result_callback = result_cb;
+    goal_options.goal_response_callback = response_cb;
     
-    auto future = mb_action_client->async_send_goal(mb_goal);
+    auto future = mb_action_client->async_send_goal(mb_goal, goal_options);
     rclcpp::spin_until_future_complete(shared_from_this(), future);
+
+    rclcpp::Rate rate(0.5);
+    while(rclcpp::ok() && !complete)
+    {
+        //if there was explicit cancellation or just a new goal overwriting the current one
+        if(goalCancelled || m_activeServerGoalHandle != currentServerGoal)
+        {
+            goalCancelled = true;
+            mb_action_client->async_cancel_goal(m_activeClientGoalHandle);
+        }
+        rclcpp::spin_some(shared_from_this());
+        rate.sleep();
+    }
+
 }
 
 
@@ -1003,14 +1027,14 @@ rclcpp_action::CancelResponse CNavAssistant::handle_cancel( const std::shared_pt
 {
     RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
     goalCancelled = true;
-    m_activeGoal = {nullptr};
+    m_activeServerGoalHandle = {nullptr};
     mb_action_client->async_cancel_all_goals();
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void CNavAssistant::handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle)
 {
-    m_activeGoal=goal_handle->get_goal();
+    m_activeServerGoalHandle=goal_handle;
 }
 
 void CNavAssistant::execute()
@@ -1018,8 +1042,7 @@ void CNavAssistant::execute()
     // This ActionServer is a wrapper for move_base aiming at a more robust navvigation and error handling
     try
     {
-        auto goal = m_activeGoal;
-        m_activeGoal = {nullptr};
+        auto goal = m_activeServerGoalHandle->get_goal();
         if (verbose) 
             RCLCPP_INFO(get_logger(), "[NavAssistant] Starting Navigation Assistant to reach: [%.2f, %.2f]", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
         
@@ -1251,8 +1274,15 @@ int main(int argc, char** argv)
     while(rclcpp::ok())
     {
         rclcpp::spin_some(nav_assistant);
-        if(nav_assistant->m_activeGoal.get() != nullptr)
+        if(nav_assistant->m_activeServerGoalHandle.get() != nullptr)
+        {
+            auto currentServerGoalHandle = nav_assistant->m_activeServerGoalHandle; 
             nav_assistant->execute();
+            
+            //dont reset the variable if a new goal was received before the last one was completed
+            if(currentServerGoalHandle == nav_assistant->m_activeServerGoalHandle)
+                nav_assistant->m_activeServerGoalHandle = {nullptr};
+        }
     }
 
     return 0;

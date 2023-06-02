@@ -1,10 +1,10 @@
 #! /usr/bin/env python
 
-import rospy
-from navigation_assistant.srv import nav_assistant_poi, nav_assistant_poiResponse, nav_assistant_set_CNP, nav_assistant_set_CNPResponse
+import rclpy
+from rclpy.node import Node
+from nav_assistant_msgs.srv import NavAssistantPOI, NavAssistantSetCNP
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav_msgs.msg import OccupancyGrid, MapMetaData
-from tf.transformations import quaternion_from_euler
 
 import copy
 import numpy as np
@@ -13,53 +13,48 @@ import matplotlib
 import matplotlib.pyplot as plt
 from math import cos, sin, radians, degrees, sqrt, atan2
 import cv2 as cv
+import sys
 
-class nav_assist_functions:
+class nav_assist_functions(Node):
     # ---------------------------------------------------------------------
     #                                INIT
     # ---------------------------------------------------------------------
     def __init__(self):
-        rospy.init_node("nav_assistant_functions")
+        super().__init__('nav_assistant_functions')
         
         # Read params
-        self.verbose = rospy.get_param("~verbose",False)
+
+        self.declare_parameter('verbose', False)
+        self.verbose = self.get_parameter('verbose').get_parameter_value().bool_value
+
 
         # Subscribers to MAP
-        rospy.Subscriber("/map", OccupancyGrid, self.map_cb)
+        self.map_sub =  self.create_subscription( OccupancyGrid, "/map", self.map_cb, 10)
         self.currentMap = OccupancyGrid()
         self.hasMap = False
         # Wait till map is available
+        wait_rate = self.create_rate(1)
         while not self.hasMap:
-            rospy.sleep(1.0)
-            rospy.loginfo( "[nav_assistant_functions] Waiting to get the occupancy Map of the environment." )
+            self.get_logger().info( "[nav_assistant_functions] Waiting to get the occupancy Map of the environment." )
+            wait_rate.sleep()
 
         # subscribe to Global Costmap
-        rospy.Subscriber("/move_base/global_costmap/costmap", OccupancyGrid, self.gcostmap_cb)
+        self.costmap_sub = self.create_subscription(OccupancyGrid, "/global_costmap/costmap", self.gcostmap_cb, 10)
         self.currentCostMap = OccupancyGrid()
         self.has_global_costmap = False
         # Wait till CostMap is available
         while not self.has_global_costmap:
-            rospy.sleep(1.0)
-            rospy.loginfo( "[nav_assistant_functions] Waiting to get the Global CostMap." )
-
-
-        # Define shutdown function
-        rospy.on_shutdown(self.bye)
+            rclpy.loginfo( "[nav_assistant_functions] Waiting to get the Global CostMap." )
+            wait_rate.sleep()
 
         # Advertaise services
-        srv_poi = rospy.Service('navigation_assistant/get_poi_related_poses', nav_assistant_poi, self.handle_new_poi)
-        srv_cnp = rospy.Service('navigation_assistant/get_cnp_pose_around', nav_assistant_set_CNP, self.handle_new_cnp)
+        self.srv_poi = self.create_service(NavAssistantPOI, 'navigation_assistant/get_poi_related_poses', self.handle_new_poi)
+        self.srv_cnp = self.create_service(NavAssistantSetCNP, 'navigation_assistant/get_cnp_pose_around', self.handle_new_cnp)
 
         # Loop
-        rospy.loginfo( "[nav_assistant_functions] Config done... LOOPING" )
-        rospy.spin()
+        self.get_logger().info()( "[nav_assistant_functions] Config done... LOOPING" )
         
 
-    # =============================================================
-    # ================           SHUTDOWN          ================
-    # =============================================================
-    def bye(self):
-        print ("shutdown time!")
 
     # =============================================================
     # ================           GET THE MAP       ================
@@ -104,7 +99,7 @@ class nav_assist_functions:
     # ================    NEW POINT OF INTEREST (SRV CALL)  =======
     # =============================================================    
     def handle_new_poi(self,req):
-        if self.verbose: rospy.loginfo("[nav_assistant_functions] Setting SPs and INGs for given CNP/CP" )
+        if self.verbose: rclpy.loginfo("[nav_assistant_functions] Setting SPs and INGs for given CNP/CP" )
 
         # Init srv response
         res = nav_assistant_poiResponse()
@@ -125,42 +120,42 @@ class nav_assist_functions:
                 # SP points
                 res.sp = []
                 mypose = PoseStamped()
-                mypose.header.stamp = rospy.Time.now()
+                mypose.header.stamp = rclpy.Time.now()
                 mypose.header.frame_id = "map"
                 mypose.pose.position.x = aux_points[0][0][0]
                 mypose.pose.position.y = aux_points[0][0][1]
                 mypose.pose.position.z = 0.0
-                mypose.pose.orientation =  Quaternion(*quaternion_from_euler(0.0, 0.0, 0.0))
+                mypose.pose.orientation =  Quaternion()
                 res.sp.append(mypose)
 
                 mypose2 = PoseStamped()
-                mypose2.header.stamp = rospy.Time.now()
+                mypose2.header.stamp = rclpy.Time.now()
                 mypose2.header.frame_id = "map"
                 mypose2.pose.position.x = aux_points[0][1][0]
                 mypose2.pose.position.y = aux_points[0][1][1]
                 mypose2.pose.position.z = 0.0
-                mypose2.pose.orientation =  Quaternion(*quaternion_from_euler(0.0, 0.0, 0.0))
+                mypose2.pose.orientation =  Quaternion()
                 res.sp.append(mypose2)
 
 
                 # ING points
                 res.ing = []
                 mypose3 = PoseStamped()
-                mypose3.header.stamp = rospy.Time.now()
+                mypose3.header.stamp = rclpy.Time.now()
                 mypose3.header.frame_id = "map"
                 mypose3.pose.position.x = aux_points[0][2][0]
                 mypose3.pose.position.y = aux_points[0][2][1]
                 mypose3.pose.position.z = 0.0
-                mypose3.pose.orientation =  Quaternion(*quaternion_from_euler(0.0, 0.0, 0.0))
+                mypose3.pose.orientation =  Quaternion()
                 res.ing.append(mypose3)
 
                 mypose4 = PoseStamped()
-                mypose4.header.stamp = rospy.Time.now()
+                mypose4.header.stamp = rclpy.Time.now()
                 mypose4.header.frame_id = "map"
                 mypose4.pose.position.x = aux_points[0][3][0]
                 mypose4.pose.position.y = aux_points[0][3][1]
                 mypose4.pose.position.z = 0.0
-                mypose4.pose.orientation =  Quaternion(*quaternion_from_euler(0.0, 0.0, 0.0))
+                mypose4.pose.orientation =  Quaternion()
                 res.ing.append(mypose4)
             except:
                 print ("[NavAssitant-handle_new_poi] Unexpected error:", sys.exc_info()[0])
@@ -177,7 +172,7 @@ class nav_assist_functions:
     # ============    GET CNP POSE around Point (SRV call)  =======
     # =============================================================
     def handle_new_cnp(self,req):
-        if self.verbose: rospy.loginfo("[nav_assistant_functions] Setting pose of CNP/CP around given pose." )
+        if self.verbose: rclpy.loginfo("[nav_assistant_functions] Setting pose of CNP/CP around given pose." )
 
         # Prepare srv response
         res = nav_assistant_set_CNPResponse()
@@ -202,23 +197,23 @@ class nav_assist_functions:
             if Pimg is not None:
                 # Pimg is the location in pixels [in the cropped-img system]
 
-                #if self.verbose: rospy.loginfo("[nav_assistant_functions] New CNP at pixles (x=%d, y=%d)[px] of the Cropped Image", int(Pimg[0]), int(Pimg[1]) )
+                #if self.verbose: rclpy.loginfo("[nav_assistant_functions] New CNP at pixles (x=%d, y=%d)[px] of the Cropped Image", int(Pimg[0]), int(Pimg[1]) )
                 height, width, channels = img.shape
                 Ppx_x = seed_px[0] - int(height/2) + Pimg[0]
                 Ppx_y = seed_px[1] - int(width/2) + Pimg[1]
 
                 # Get Coordinates in meters in the "map" ref system
                 Pcnp = self.pixels_to_meters(T, [Ppx_x,Ppx_y], resolution)
-                if self.verbose: rospy.loginfo("[nav_assistant_functions] New CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
+                if self.verbose: rclpy.loginfo("[nav_assistant_functions] New CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
 
                 # Done
                 mypose = PoseStamped()
-                mypose.header.stamp = rospy.Time.now()
+                mypose.header.stamp = rclpy.Time.now()
                 mypose.header.frame_id = "map"
                 mypose.pose.position.x = Pcnp[0]
                 mypose.pose.position.y = Pcnp[1]
                 mypose.pose.position.z = 0.0
-                mypose.pose.orientation =  Quaternion(*quaternion_from_euler(0.0, 0.0, 0.0))
+                mypose.pose.orientation =  Quaternion()
                 res.pose = mypose
                 res.success = True
                 return res
@@ -238,7 +233,7 @@ class nav_assist_functions:
         show_image = False
 
         while not self.has_global_costmap:
-            rospy.sleep(0.5);
+            rclpy.sleep(0.5);
 
         # Transform Global Costmap to cv image
         width = self.currentCostMap.info.width
@@ -362,7 +357,7 @@ class nav_assist_functions:
 
         # ASSERT we have 2 contours!
         if len(selected_contours) != 2:
-            if self.verbose: rospy.loginfo("[nav_assistant_functions] Error detecting contours in costmap")
+            if self.verbose: rclpy.loginfo("[nav_assistant_functions] Error detecting contours in costmap")
             return None
         else:
             return Pcenter
@@ -543,7 +538,7 @@ class nav_assist_functions:
 
         # robot
         # -- in meters
-        DIAMETER_M = 2*rospy.get_param("/move_base/global_costmap/robot_radius")
+        DIAMETER_M = 2*rclpy.get_param("/move_base/global_costmap/robot_radius")
         INFLATION = 1.2
         if self.verbose: print("Robot radious[m]=%.3f, Inflation=%.3f" %(DIAMETER_M, INFLATION))
 
@@ -759,6 +754,17 @@ class nav_assist_functions:
 # =============================================================
 # ==========================  MAIN  ===========================
 # =============================================================
-if __name__ == '__main__':
+def main(args=None):
+    rclpy.init(args=args)
     navfun = nav_assist_functions()
+    rclpy.spin(navfun)
 
+    # Destroy the node explicitly
+    # (optional - otherwise it will be done automatically
+    # when the garbage collector destroys the node object)
+    navfun.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

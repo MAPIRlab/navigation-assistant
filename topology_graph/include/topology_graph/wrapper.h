@@ -1,4 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include "topology_graph/ahgraph.h"
 #include "topology_graph/srv/graph.hpp"
 #include <topology_graph/json/json.hpp>
@@ -7,7 +8,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <boost/algorithm/string.hpp>
-#include <nav_msgs/srv/get_plan.hpp>
+#include <nav2_msgs/action/compute_path_to_pose.hpp>
 #include <tf2_ros/transform_listener.h>
 
 #include <string.h>
@@ -18,6 +19,7 @@
 
 using namespace std;
 using json = nlohmann::json;
+typedef nav2_msgs::action::ComputePathToPose GetPlan;
 
 class CGraphWrapper : public rclcpp::Node
 {
@@ -39,7 +41,7 @@ protected:
     geometry_msgs::msg::PoseWithCovarianceStamped current_robot_pose;
 
     // Make:plan service client
-    rclcpp::Client<nav_msgs::srv::GetPlan>::SharedPtr mb_srv_client;    
+    rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;    
 
     // Service offered
     rclcpp::Service<topology_graph::srv::Graph>::SharedPtr service;

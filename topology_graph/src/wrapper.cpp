@@ -122,9 +122,9 @@ CGraphWrapper::CGraphWrapper() : Node("Topology_graph")
     path_pub = create_publisher<nav_msgs::msg::Path>("topology_graph_paths", 1);
         
     // Make plan service client
-    mb_srv_client = create_client<nav_msgs::srv::GetPlan>("/move_base/NavfnROS/make_plan");
+    getPlanClient = rclcpp_action::create_client<GetPlan>(this, "compute_path_to_pose");
     using namespace std::chrono_literals;
-    while (!mb_srv_client->wait_for_service(5.0s) )
+    while ( rclcpp::ok() && !getPlanClient->wait_for_action_server(5.0s) )
         spdlog::warn("[topology_graph] Waiting for move_base MAKE_PLAN srv to come online.");
 
     // Ropot pose subscriber
@@ -1372,21 +1372,24 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
 {
     try
     {
+        GetPlan::Goal request;
+        request.start.header.frame_id = "map";
+        request.start.pose = pose_origin;
+        request.goal.header.frame_id = "map";
+        request.goal.pose = pose_goal;
 
-        // Use move_base service "make_plan" to set navigation distances
-        auto request = std::make_shared<nav_msgs::srv::GetPlan::Request>();
 
-        // 1. Set the starting and end points
-        request->start.header.frame_id = "map";
-        request->start.header.stamp = now();
-        request->start.pose = pose_origin;
-        request->goal.header.frame_id = "map";
-        request->goal.header.stamp = now();
-        request->goal.pose = pose_goal;
+        nav_msgs::msg::Path plan;
+        static auto result_cb = [&](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult w_result)
+        {
+            plan = w_result.result->path;
+        };
+
+        auto goal_options = rclcpp_action::Client<GetPlan>::SendGoalOptions();
+        goal_options.result_callback = result_cb;
         
-        auto future = mb_srv_client->async_send_request(request);
+        auto future = getPlanClient->async_send_goal(request, goal_options); 
         auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get().get();
         //Check if three is a valid path between both poses
         if (result != rclcpp::FutureReturnCode::SUCCESS)
         {
@@ -1394,7 +1397,7 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
             spdlog::error("[topology_graph] Unable to call MAKE_PLAN service from MoveBase");
             return -1.0;
         }
-        else if ( response->plan.poses.empty() )
+        else if ( plan.poses.empty() )
         {
             // Path not available --> We cannot estimate a path between these two locations
             if (verbose) spdlog::warn("[topology_graph] MAKE_PLAN returned empty. Unable to find a path between poses [%.2f, %.2f] and [%.2f, %.2f]",
@@ -1436,18 +1439,18 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
             double dist_step = 1.0; //m
             double Ax, Ay, d = 0.0, total_nav_dist = 0.0;
             geometry_msgs::msg::Pose p_ini, p_end;
-            for (size_t h=0; h<response->plan.poses.size(); h++)
+            for (size_t h=0; h<plan.poses.size(); h++)
             {
                 if (h==0)
                 {
-                    Ax = request->start.pose.position.x - response->plan.poses[h].pose.position.x;
-                    Ay = request->start.pose.position.y - response->plan.poses[h].pose.position.y;
-                    p_ini = response->plan.poses[h].pose;
+                    Ax = request.start.pose.position.x - plan.poses[h].pose.position.x;
+                    Ay = request.start.pose.position.y - plan.poses[h].pose.position.y;
+                    p_ini = plan.poses[h].pose;
                 }
                 else
                 {
-                    Ax = response->plan.poses[h-1].pose.position.x - response->plan.poses[h].pose.position.x;
-                    Ay = response->plan.poses[h-1].pose.position.y - response->plan.poses[h].pose.position.y;
+                    Ax = plan.poses[h-1].pose.position.x - plan.poses[h].pose.position.x;
+                    Ay = plan.poses[h-1].pose.position.y - plan.poses[h].pose.position.y;
                 }
                 d += sqrt( pow(Ax,2) + pow(Ay,2) );
                 total_nav_dist += sqrt( pow(Ax,2) + pow(Ay,2) );
@@ -1456,7 +1459,7 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
                 if (d >= dist_step)
                 {
                     // Set poses of segment
-                    p_end = response->plan.poses[h].pose;
+                    p_end = plan.poses[h].pose;
 
                     // Check if current segment interesect any segment in full_node_list
                     if (segment_intersect_node(p_ini, p_end, full_node_list) )
@@ -1474,7 +1477,7 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
             }
 
             // End of Path
-            p_end = response->plan.poses[response->plan.poses.size()-1].pose;
+            p_end = plan.poses[plan.poses.size()-1].pose;
             if (segment_intersect_node(p_ini, p_end, full_node_list) )
             {
                 //This path crosses a CNP

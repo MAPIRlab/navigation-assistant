@@ -3,10 +3,10 @@
 #include "set_nav_goal_tool.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
-#include <navigation_assistant/action/nav_assistant.hpp>
+#include <nav_assistant_msgs/action/nav_assistant.hpp>
 
 
-namespace rviz
+namespace rviz_nav_assistant
 {
     SetNavGoalTool::SetNavGoalTool() : Node("NacAssistantRvizTool")
     {
@@ -31,7 +31,7 @@ namespace rviz
     // Allow to set the topic name in the RVIZ properties
     void SetNavGoalTool::updateTopic()
     {
-      pub_ = create_publisher<navigation_assistant::action::NavAssistant_Goal>( topic_property_->getStdString(), 1 );
+      pub_ = create_publisher<nav_assistant_msgs::action::NavAssistant_Goal>( topic_property_->getStdString(), 1 );
     }
 
 
@@ -56,7 +56,7 @@ namespace rviz
         goal.pose.position.x, goal.pose.position.y, goal.pose.position.z,
         goal.pose.orientation.x, goal.pose.orientation.y, goal.pose.orientation.z, goal.pose.orientation.w, theta);
 
-        navigation_assistant::action::NavAssistant_Goal nav_goal;
+        nav_assistant_msgs::action::NavAssistant_Goal nav_goal;
         nav_goal.target_pose = goal;
         nav_goal.turn_before_nav = true;
         pub_->publish(nav_goal);
@@ -65,4 +65,4 @@ namespace rviz
 }// end namespace rviz
 
 #include <pluginlib/class_list_macros.hpp>
-PLUGINLIB_EXPORT_CLASS( rviz::SetNavGoalTool, rviz_common::Tool )
+PLUGINLIB_EXPORT_CLASS( rviz_nav_assistant::SetNavGoalTool, rviz_common::Tool )

@@ -14,7 +14,7 @@ find_package(rclcpp REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(nav_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Boost REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -38,7 +38,7 @@ add_executable(topology_graph_node src/ahgraph.cpp  src/wrapper.cpp)
 ament_target_dependencies(topology_graph_node
     rclcpp
     std_msgs
-    nav_msgs
+    nav2_msgs
     tf2_ros
     tf2_geometry_msgs
     Boost
@@ -61,7 +61,7 @@ install(
 
 install(
     FILES include/topology_graph/json/json.hpp
-    DESTINATION include/topology_graph/json
+    DESTINATION include/topology_graph/topology_graph/json
 )
 
 ament_package()

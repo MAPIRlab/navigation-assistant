@@ -4,10 +4,10 @@
 
 // actionlib
 #include <rclcpp_action/rclcpp_action.hpp>
-#include <navigation_assistant/action/nav_assistant.hpp>
-#include <navigation_assistant/srv/nav_assistant_point.hpp>
-#include <navigation_assistant/srv/nav_assistant_poi.hpp>
-#include <navigation_assistant/srv/nav_assistant_set_cnp.hpp>
+#include <nav_assistant_msgs/action/nav_assistant.hpp>
+#include <nav_assistant_msgs/srv/nav_assistant_point.hpp>
+#include <nav_assistant_msgs/srv/nav_assistant_poi.hpp>
+#include <nav_assistant_msgs/srv/nav_assistant_set_cnp.hpp>
 
 // msgs
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -22,19 +22,23 @@
 
 // move_base (AS)
 #include <nav2_msgs/action/navigate_to_pose.hpp>
-#include <nav_msgs/srv/get_plan.hpp>
+#include <nav2_msgs/action/compute_path_to_pose.hpp>
 
 // topology_graph
 #include "topology_graph/srv/graph.hpp"
-#include <json/json.hpp>
-#include <navigation_assistant/srv/make_plan.hpp>
+#include <topology_graph/json/json.hpp>
+#include <nav_assistant_msgs/srv/make_plan.hpp>
 
 using namespace std;
 using json = nlohmann::json;
-namespace NAS=navigation_assistant::srv;
-namespace NAS_ac=navigation_assistant::action;
+namespace NAS=nav_assistant_msgs::srv;
+namespace NAS_ac=nav_assistant_msgs::action;
 typedef rclcpp_action::ServerGoalHandle<NAS_ac::NavAssistant> GoalHandleNavigate_Server;
+
 typedef nav2_msgs::action::NavigateToPose NavToPose;
+typedef rclcpp_action::ClientGoalHandle<NavToPose> NavToPoseClientGoalHandle;
+
+typedef nav2_msgs::action::ComputePathToPose GetPlan;
 
 
 class CNavAssistant : public rclcpp::Node
@@ -55,7 +59,9 @@ public:
     CNavAssistant(std::string name);
     ~CNavAssistant(void);
 
-    std::shared_ptr<const NAS_ac::NavAssistant::Goal> m_activeGoal;
+    std::shared_ptr<const GoalHandleNavigate_Server> m_activeServerGoalHandle;
+    std::shared_ptr<NavToPoseClientGoalHandle> m_activeClientGoalHandle;
+
     void execute();
     rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const NAS_ac::NavAssistant::Goal> goal);
     rclcpp_action::CancelResponse handle_cancel( const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
@@ -81,11 +87,11 @@ private:
     geometry_msgs::msg::PoseWithCovarianceStamped current_robot_pose;
 
     // Make:plan service client (to estimate paths)
-    rclcpp::Client<nav_msgs::srv::GetPlan>::SharedPtr mb_srv_client;
     rclcpp::Client<topology_graph::srv::Graph>::SharedPtr graph_srv_client;
     rclcpp::Client<NAS::NavAssistantPOI>::SharedPtr nav_assist_functions_client_POI; 
     rclcpp::Client<NAS::NavAssistantSetCNP>::SharedPtr nav_assist_functions_client_CNP;
     
+    rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;
     rclcpp::Service<NAS::MakePlan>::SharedPtr makePlanServer;
 
     bool makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::MakePlan::Response::SharedPtr response);

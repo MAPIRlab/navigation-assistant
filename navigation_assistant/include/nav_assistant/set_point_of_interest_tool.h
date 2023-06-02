@@ -8,11 +8,11 @@
 # include <rclcpp/rclcpp.hpp>
 # include <rviz_common/tool.hpp>
 #endif
-#include <navigation_assistant/srv/nav_assistant_poi.hpp>
-#include <navigation_assistant/srv/nav_assistant_point.hpp>
+#include <nav_assistant_msgs/srv/nav_assistant_poi.hpp>
+#include <nav_assistant_msgs/srv/nav_assistant_point.hpp>
 
 
-namespace POI
+namespace rviz_nav_assistant
 {
     // declare our new subclass of rviz::Tool
     class SetPointOfInterestTool : public rviz_common::Tool, public rclcpp::Node
@@ -32,7 +32,7 @@ namespace POI
       virtual int processMouseEvent(rviz_common::ViewportMouseEvent& event) override;
 
     private:
-      rclcpp::Client<navigation_assistant::srv::NavAssistantPoint>::SharedPtr nav_assist_srv_client;
+      rclcpp::Client<nav_assistant_msgs::srv::NavAssistantPoint>::SharedPtr nav_assist_srv_client;
       bool shift_down;
     };
 

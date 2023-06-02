@@ -16,6 +16,7 @@
 
   <build_depend>rclcpp</build_depend>
   <build_depend>topology_graph</build_depend>
+  <build_depend>nav_assistant_msgs</build_depend>
   <build_depend>std_msgs</build_depend>
   <build_depend>visualization_msgs</build_depend>
 
@@ -24,7 +25,6 @@
   <exec_depend>rclcpp</exec_depend>
   <exec_depend>std_msgs</exec_depend>
 
-  <member_of_group>rosidl_interface_packages</member_of_group>
   <export>
     <build_type>ament_cmake</build_type>
     <rviz plugin="${prefix}/plugin_description.xml"/>

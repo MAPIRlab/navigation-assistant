@@ -9,12 +9,12 @@
 #include <rviz_common/properties/string_property.hpp>
 
 #endif
-#include "navigation_assistant/action/nav_assistant.hpp"
+#include "nav_assistant_msgs/action/nav_assistant.hpp"
 
-namespace rviz
+namespace rviz_nav_assistant
 {
     // Every tool which can be added to the tool bar is a subclass of rviz::Tool (or another Class inheriting from it)
-    class SetNavGoalTool: public rviz_default_plugins::tools::PoseTool, public rclcpp::Node
+    class RVIZ_DEFAULT_PLUGINS_PUBLIC SetNavGoalTool: public rviz_default_plugins::tools::PoseTool, public rclcpp::Node
     {
     Q_OBJECT
     public:
@@ -30,7 +30,7 @@ namespace rviz
       void updateTopic();
 
     private:
-      rclcpp::Publisher<navigation_assistant::action::NavAssistant_Goal>::SharedPtr pub_;
+      rclcpp::Publisher<nav_assistant_msgs::action::NavAssistant_Goal>::SharedPtr pub_;
 
       rviz_common::properties::StringProperty* topic_property_;      //where to publish the navigation goals.
     };
