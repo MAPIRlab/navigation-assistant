@@ -46,6 +46,11 @@ ament_target_dependencies(nav_assistant_node
     Boost
 )
 
+install(
+    TARGETS nav_assistant_node
+    DESTINATION lib/${PROJECT_NAME}
+)
+
 
 
 
@@ -53,31 +58,24 @@ ament_target_dependencies(nav_assistant_node
 
 ##########
 ##  QT  ##
-##########
+########## 
 ## This setting causes Qt's "MOC" generation to happen automatically.
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
-message(STATUS "Using Qt5 based on the rviz_QT_VERSION: ${rviz_QT_VERSION}")
 find_package(Qt5 ${rviz_QT_VERSION} REQUIRED Core Widgets)
-## make target_link_libraries(${QT_LIBRARIES}) pull in all required dependencies
 set(QT_LIBRARIES Qt5::Widgets)
-
-## I prefer the Qt signals and slots to avoid defining "emit", "slots",
-## etc because they can conflict with boost signals, so define QT_NO_KEYWORDS here.
 add_definitions(-DQT_NO_KEYWORDS)
 
-###########
-##  TOOL ##
-###########
-## list of source files that will compose the RVIZ tool
-## The generated MOC files are included automatically as headers.
 set(SRC_FILES
 src/set_nav_goal_tool.cpp
 src/set_point_of_interest_tool.cpp
+include/nav_assistant/set_nav_goal_tool.h
+include/nav_assistant/set_point_of_interest_tool.h
 )
 
 ## An rviz plugin is just a shared library
-add_library(nav_assistant_tools ${SRC_FILES})
+add_library(nav_assistant_tools SHARED ${SRC_FILES})
 ament_target_dependencies(nav_assistant_tools 
     tf2
     tf2_geometry_msgs
@@ -86,21 +84,24 @@ ament_target_dependencies(nav_assistant_tools
     rviz_default_plugins
     rviz_ogre_vendor
 )
-
-## Link the myviz executable with whatever Qt libraries have been defined
-## Although this puts "rviz_plugin_tutorials" (or whatever you have
-## called the project) as the name of the library, cmake knows it is a
-## library and names the actual file something like
-## "librviz_plugin_tutorials.so", or whatever is appropriate for your
-## particular OS.
 target_link_libraries(nav_assistant_tools ${QT_LIBRARIES})
 
-
-
+target_compile_definitions(nav_assistant_tools PRIVATE "RVIZ_DEFAULT_PLUGINS_BUILDING_LIBRARY")
+pluginlib_export_plugin_description_file(rviz_common plugin_description.xml)
+ament_export_targets(nav_assistant_tools HAS_LIBRARY_TARGET)
 
 
 install(
-    TARGETS  nav_assistant_tools nav_assistant_node
-    DESTINATION lib/${PROJECT_NAME}
-    )
-    ament_package()
+  DIRECTORY include/
+  DESTINATION include/
+)
+
+install(
+  TARGETS nav_assistant_tools
+  EXPORT nav_assistant_tools
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+  INCLUDES DESTINATION include
+)
+ament_package()

@@ -50,7 +50,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server")
     topology_parameter = declare_parameter<std::string>("topological_json_parameter","/topological_map");
     load_passages_as_CP = declare_parameter<bool>("load_passages_as_CP",  false);
     force_CP_as_additional_ANP = declare_parameter<bool>("force_CP_as_additional_ANP",  false);
-    init_from_file = declare_parameter<std::string>("init_from_file","~/topological_map");
+    init_from_file = declare_parameter<std::string>("init_from_file","");
     save_to_file = declare_parameter<std::string>("save_to_file","");
 
 
@@ -75,7 +75,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server")
         using namespace std::chrono_literals;
         // WAITs
         while (rclcpp::ok() && !mb_action_client->wait_for_action_server(10s))
-            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with MoveBase serer! waiting...");
+            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with MoveBase server! waiting...");
         while (rclcpp::ok() && !getPlanClient->wait_for_action_server(10s) )
             RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with MoveBase make_plan srv! waiting...");
         while (rclcpp::ok() && !graph_srv_client->wait_for_service(10s) )
@@ -86,15 +86,19 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server")
             RCLCPP_ERROR(get_logger(), "[NavAssistant] Unable to contact with the navigation_assistant functions srv! waiting...");
 
     }
+}
 
-    // All srv and actions are ready to be used.
-    // Initialize Navigation Graph
+void CNavAssistant::Init()
+{
+    //This initialization has to be moved outside of the constructor because calling services requires the shared_from_this() pointer to be avaliable, 
+    //which can only happen after the constructor has exited
+    
     if (init_from_file != "")
     {
         // The topology has been previously saved to file. Reload it.
         RCLCPP_INFO(get_logger(), "[NavAssistant] Loading Graph from file [%s]", init_from_file.c_str());
         //File contains a boost::graphviz description of the nodes and arcs
-        topology_graph::srv::Graph::Request::SharedPtr request;
+        auto request = std::make_shared<topology_graph::srv::Graph::Request>();
         request->cmd = "LoadGraph";    // params: [file_path]
         request->params.clear();
         request->params.push_back(init_from_file);
@@ -143,6 +147,11 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server")
     RCLCPP_INFO(get_logger(), "[NavAssistant] Node ready for action!");
 }
 
+void CNavAssistant::getPlanCB(const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result)
+{
+    m_CurrentPlan = w_result.result->path;
+}
+
 bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::MakePlan::Response::SharedPtr response)
 {
     GetPlan::Goal mb_request;
@@ -150,15 +159,8 @@ bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::Mak
     mb_request.start = request->start;
     mb_request.goal = request->goal;
 
-
-    nav_msgs::msg::Path plan;
-    static auto result_cb = [&](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult w_result)
-    {
-        plan = w_result.result->path;
-    };
-
     auto goal_options = rclcpp_action::Client<GetPlan>::SendGoalOptions();
-    goal_options.result_callback = result_cb;
+    goal_options.result_callback = std::bind(&CNavAssistant::getPlanCB, this, _1);
     
     auto future = getPlanClient->async_send_goal(mb_request, goal_options); 
     auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
@@ -171,7 +173,7 @@ bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::Mak
         response->valid_path = false;
         return false;
     }
-    else if (plan.poses.empty() )
+    else if (m_CurrentPlan.poses.empty() )
     {
         if (verbose) RCLCPP_WARN(get_logger(), "[NavAssistant-turn_towards_path] Unable to get plan");
         response->valid_path = false;
@@ -179,7 +181,7 @@ bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::Mak
     }
 
     response->valid_path = true;
-    response->plan = plan;
+    response->plan = m_CurrentPlan;
     return true;
 }
 
@@ -343,11 +345,11 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
     {
         if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Estimating optimal pose for CNP around [%.3f, %.3f]", pose_x, pose_y);
         // Estimate best location for the CP/CNP/passage around given pose
-        NAS::NavAssistantSetCNP::Request::SharedPtr request;
+        auto request = std::make_shared<NAS::NavAssistantSetCNP::Request>();
         request->pose = node_pose;
         auto future = nav_assist_functions_client_CNP->async_send_request(request);
         rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get().get();
+        auto response = future.get();
         //Update pose
         if (response->success)
         {
@@ -360,7 +362,7 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
 
 
     // 1. Add a new node in the graph
-    topology_graph::srv::Graph::Request::SharedPtr graphRequest;
+    auto graphRequest = std::make_shared<topology_graph::srv::Graph::Request>();
     graphRequest->cmd = "AddNode";    // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
     graphRequest->params.push_back(node_label);
     graphRequest->params.push_back(node_type);
@@ -371,7 +373,7 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
     {
         auto future = graph_srv_client->async_send_request(graphRequest);
         rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get().get();
+        auto response = future.get();
         
         if (!response->success)
         {
@@ -384,12 +386,12 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
     if (node_type == "passage")
     {
         // Estimate and Add the two Segment Points (SP) that define this passage
-        NAS::NavAssistantPOI::Request::SharedPtr request;
+        auto request = std::make_shared<NAS::NavAssistantPOI::Request>();
         request->pose = node_pose;
 
         auto future = nav_assist_functions_client_POI->async_send_request(request);
         rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get().get();
+        auto response = future.get();
 
         if (response->success)
         {
@@ -406,7 +408,7 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
                 
                 auto future = graph_srv_client->async_send_request(graphRequest);
                 rclcpp::spin_until_future_complete(shared_from_this(), future);
-                auto response = future.get().get();
+                auto response = future.get();
 
                 if (!response->success)
                 {
@@ -421,12 +423,12 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
     else if ( (node_type == "CNP") || (node_type == "CP") )
     {
         // Estimate and Add the two Segment Points (SP) and the two Intermediate Navigation Goals (ING)
-        NAS::NavAssistantPOI::Request::SharedPtr poiRequest;
+        auto poiRequest = std::make_shared<NAS::NavAssistantPOI::Request>();
         poiRequest->pose = node_pose;
 
         auto future = nav_assist_functions_client_POI->async_send_request(poiRequest);
         rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get().get();
+        auto response = future.get();
 
         if (response->success)
         {
@@ -444,7 +446,7 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
                 
                 auto future = graph_srv_client->async_send_request(graphRequest);
                 rclcpp::spin_until_future_complete(shared_from_this(), future);
-                auto response = future.get().get();
+                auto response = future.get();
 
                 if (!response->success)
                 {
@@ -469,7 +471,7 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
                 
                 auto future = graph_srv_client->async_send_request(graphRequest);
                 rclcpp::spin_until_future_complete(shared_from_this(), future);
-                auto response = future.get().get();
+                auto response = future.get();
 
                 if (!response->success)
                 {
@@ -497,7 +499,7 @@ void CNavAssistant::regenerate_arcs()
     {
         if (verbose) 
             RCLCPP_INFO(get_logger(), "[NavAssistant] Regenerating Arcs in Graph");
-        topology_graph::srv::Graph::Request::SharedPtr clearRequest;
+        auto clearRequest = std::make_shared<topology_graph::srv::Graph::Request>();
         clearRequest->cmd = "DeleteAllArcs";    // params: [node_id]
         clearRequest->params.push_back("-1");     // All nodes = -1
         auto future = graph_srv_client->async_send_request(clearRequest);
@@ -512,7 +514,7 @@ void CNavAssistant::regenerate_arcs()
     std::vector<string> nodes_to_connect;
     nodes_to_connect.clear();
     {
-        topology_graph::srv::Graph::Request::SharedPtr regenerateRequest;
+        auto regenerateRequest=std::make_shared<topology_graph::srv::Graph::Request>();
         // ING nodes
         regenerateRequest->cmd = "GetNodesbyType";    // params: node_type
         regenerateRequest->params.clear();
@@ -520,7 +522,7 @@ void CNavAssistant::regenerate_arcs()
     
         auto future = graph_srv_client->async_send_request(regenerateRequest);
         auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get().get();
+        auto response = future.get();
     
         if (!response->success)
         {
@@ -534,7 +536,7 @@ void CNavAssistant::regenerate_arcs()
     if (force_CP_as_additional_ANP)
     {
         {
-            topology_graph::srv::Graph::Request::SharedPtr regenerateRequest;
+            auto regenerateRequest=std::make_shared<topology_graph::srv::Graph::Request>();
             // CP nodes
             regenerateRequest->cmd = "GetNodesbyType";    // params: node_type
             regenerateRequest->params.clear();
@@ -542,7 +544,7 @@ void CNavAssistant::regenerate_arcs()
             
             auto future = graph_srv_client->async_send_request(regenerateRequest);
             auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-            auto response = future.get().get();
+            auto response = future.get();
             if (!response->success)
             {
                 RCLCPP_WARN(get_logger(), "[NavAssistant-regenerateArcs]: Unable to get CP Nodes from Graph");
@@ -553,7 +555,7 @@ void CNavAssistant::regenerate_arcs()
         }
 
         {
-            topology_graph::srv::Graph::Request::SharedPtr regenerateRequest;
+            auto regenerateRequest=std::make_shared<topology_graph::srv::Graph::Request>();
             // CNP nodes
             regenerateRequest->cmd = "GetNodesbyType";    // params: node_type
             regenerateRequest->params.clear();
@@ -561,7 +563,7 @@ void CNavAssistant::regenerate_arcs()
             
             auto future = graph_srv_client->async_send_request(regenerateRequest);
             auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-            auto response = future.get().get();
+            auto response = future.get();
             if (!response->success)
             {
                 RCLCPP_WARN(get_logger(), "[NavAssistant-regenerateArcs]: Unable to get ING Nodes from Graph");
@@ -595,7 +597,7 @@ void CNavAssistant::regenerate_arcs()
                 if (!force_CP_as_additional_ANP)
                 {
                     //Create Arc beetwing the two INGs
-                    topology_graph::srv::Graph::Request::SharedPtr addArcRequest;
+                    auto addArcRequest=std::make_shared<topology_graph::srv::Graph::Request>();
                     addArcRequest->cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
                     addArcRequest->params.clear();
                     addArcRequest->params.push_back(node_data[0]);
@@ -606,7 +608,7 @@ void CNavAssistant::regenerate_arcs()
                     
                     auto future = graph_srv_client->async_send_request(addArcRequest);
                     auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-                    auto response = future.get().get();
+                    auto response = future.get();
 
                     if (!response->success)
                         RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create Arc");
@@ -615,7 +617,7 @@ void CNavAssistant::regenerate_arcs()
                 else if (node_data[2] != node_data2[2])
                 {
                     //Create Arc
-                    topology_graph::srv::Graph::Request::SharedPtr addArcRequest;
+                    auto addArcRequest=std::make_shared<topology_graph::srv::Graph::Request>();
                     addArcRequest->cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
                     addArcRequest->params.clear();
                     addArcRequest->params.push_back(node_data[0]);
@@ -626,7 +628,7 @@ void CNavAssistant::regenerate_arcs()
                     
                     auto future = graph_srv_client->async_send_request(addArcRequest);
                     auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-                    auto response = future.get().get();
+                    auto response = future.get();
 
                     if (!response->success)
                         RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create Arc");
@@ -640,7 +642,7 @@ void CNavAssistant::regenerate_arcs()
                 {
                     // Create arc if different label and type ING
                     // Check if there is a path not crossing a segment defined by a CNP or CP
-                    topology_graph::srv::Graph::Request::SharedPtr distanceRequest;
+                    auto distanceRequest=std::make_shared<topology_graph::srv::Graph::Request>();
                     distanceRequest->cmd = "GetNavDistTwoPoses";    // params: p1(x,y,yaw), p2(x,y,yaw), [avoid_node_types]
                     distanceRequest->params.clear();
                     // p1
@@ -657,7 +659,7 @@ void CNavAssistant::regenerate_arcs()
 
                     auto future = graph_srv_client->async_send_request(distanceRequest);
                     auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-                    auto response = future.get().get();
+                    auto response = future.get();
 
                     if (verbose) 
                         RCLCPP_WARN(get_logger(), "[NavAssistant]: NavDistance between Node[%s] <-> [%s] is %s (succes=%d)",node_data[0].c_str(), node_data2[0].c_str(), response->result[0].c_str(), response->success);
@@ -667,7 +669,7 @@ void CNavAssistant::regenerate_arcs()
                         //system("read -p 'Press Enter to continue...' var");
                         if (verbose) RCLCPP_WARN(get_logger(), "[NavAssistant]: Adding new Arc between ING Nodes [%s] <-> [%s]", node_data[0].c_str(), node_data2[0].c_str());
                         //Create Arc
-                        topology_graph::srv::Graph::Request::SharedPtr addArcRequest;
+                        auto addArcRequest=std::make_shared<topology_graph::srv::Graph::Request>();
                         addArcRequest->cmd = "AddArc";    // params: [idfrom, idto, label, type, bidirectional]
                         addArcRequest->params.clear();
                         addArcRequest->params.push_back(node_data[0]);
@@ -677,7 +679,7 @@ void CNavAssistant::regenerate_arcs()
                         addArcRequest->params.push_back("true");       // bidirectional arc
                         auto future = graph_srv_client->async_send_request(distanceRequest);
                         auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-                        auto response = future.get().get();
+                        auto response = future.get();
 
                         if (!response->success)
                             RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to create Arc");
@@ -696,13 +698,13 @@ bool CNavAssistant::deleteNode(std::string node_type, double pose_x, double pose
     if (verbose) 
         RCLCPP_INFO(get_logger(), "[NavAssistant] Deleting Node of type [%s], close to [%.3f, %.3f]", node_type.c_str(), pose_x, pose_y );
     //1. Get all Nodes of type: node_type
-    topology_graph::srv::Graph::Request::SharedPtr getNodesRequest;
+    auto getNodesRequest=std::make_shared<topology_graph::srv::Graph::Request>();
     getNodesRequest->cmd = "GetNodesbyType";    // params: [node_type]
     getNodesRequest->params.push_back(node_type);
     
     auto future = graph_srv_client->async_send_request(getNodesRequest);
     auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-    auto response = future.get().get();
+    auto response = future.get();
 
     if (response->success)
     {
@@ -734,17 +736,17 @@ bool CNavAssistant::deleteNode(std::string node_type, double pose_x, double pose
         //2. Delete all the nodes matching this label (nodes of all types!)
         if (verbose) 
             RCLCPP_INFO(get_logger(), "[NavAssistant] Deleting Nodes with label %s", node_label_to_delete.c_str() );
-        topology_graph::srv::Graph::Request::SharedPtr matchNodesRequest;
+        auto matchNodesRequest=std::make_shared<topology_graph::srv::Graph::Request>();
         matchNodesRequest->cmd = "GetNodesbyLabel";    // params: [node_label]
         matchNodesRequest->params.push_back( node_label_to_delete );
         
         auto future = graph_srv_client->async_send_request(matchNodesRequest);
         auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto matchResponse = future.get().get();
+        auto matchResponse = future.get();
 
         if (matchResponse->success)
         {
-            topology_graph::srv::Graph::Request::SharedPtr deleteRequest;
+            auto deleteRequest=std::make_shared<topology_graph::srv::Graph::Request>();
             // for each node with the matching label (delete it)
             for (std::string n : matchResponse->result)
             {
@@ -813,14 +815,14 @@ bool CNavAssistant::srvCB(NAS::NavAssistantPoint::Request::SharedPtr req, NAS::N
             // Save to file
             RCLCPP_INFO(get_logger(), "[NavAssistant] Saving Graph to file [%s]", save_to_file.c_str());
             //File contains a boost::graphviz description of the nodes and arcs
-            topology_graph::srv::Graph::Request::SharedPtr saveRequest;
+            auto saveRequest=std::make_shared<topology_graph::srv::Graph::Request>();
             saveRequest->cmd = "SaveGraph";    // params: [file_path]
             saveRequest->params.clear();
             saveRequest->params.push_back(save_to_file);
                 
             auto future = graph_srv_client->async_send_request(saveRequest);
             auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-            auto response = future.get().get();
+            auto response = future.get();
 
             if (!response->success)
                 RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to Save Graph from file. Skipping.");
@@ -840,8 +842,8 @@ bool CNavAssistant::srvCB(NAS::NavAssistantPoint::Request::SharedPtr req, NAS::N
 void CNavAssistant::turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal)
 {
     // Use move_base service "make_plan" to set initial orientation
-    NAS::MakePlan::Request::SharedPtr getPlanReq;
-    NAS::MakePlan::Response::SharedPtr response;
+    auto getPlanReq=std::make_shared<NAS::MakePlan::Request>();
+    auto response=std::make_shared<NAS::MakePlan::Response>();
 
     getPlanReq->start.header.frame_id = "map";
     getPlanReq->start.header.stamp = now();
@@ -964,7 +966,7 @@ void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_
     mb_goal.pose = pose_goal;
     mb_goal.pose.header.frame_id="map";
     if (verbose) 
-        RCLCPP_INFO(get_logger(), "[NavAssistant] Requesting MoveBase Navigation to [%.2f, %.2f]", mb_goal.pose.pose.position.x, mb_goal.pose.pose.position.y );
+        RCLCPP_INFO(get_logger(), "Requesting MoveBase Navigation to [%.2f, %.2f]", mb_goal.pose.pose.position.x, mb_goal.pose.pose.position.y );
     
     auto static response_cb = [&](std::shared_ptr<NavToPoseClientGoalHandle> goal_handle)
     {
@@ -980,10 +982,10 @@ void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_
             RCLCPP_INFO(this->get_logger(), "NavToPose Goal was completed");
             return;
         case rclcpp_action::ResultCode::ABORTED:
-            RCLCPP_ERROR(this->get_logger(), "NavToPose Goal was aborted");
+            RCLCPP_WARN(this->get_logger(), "NavToPose Goal was aborted");
             return;
         case rclcpp_action::ResultCode::CANCELED:
-            RCLCPP_ERROR(this->get_logger(), "NavToPose Goal was canceled");
+            RCLCPP_WARN(this->get_logger(), "NavToPose Goal was canceled");
             return;
         default:
             RCLCPP_ERROR(this->get_logger(), "NavToPose Unknown result code");
@@ -1004,6 +1006,7 @@ void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_
         //if there was explicit cancellation or just a new goal overwriting the current one
         if(goalCancelled || m_activeServerGoalHandle != currentServerGoal)
         {
+            complete = true;
             goalCancelled = true;
             mb_action_client->async_cancel_goal(m_activeClientGoalHandle);
         }
@@ -1026,14 +1029,16 @@ rclcpp_action::GoalResponse CNavAssistant::handle_goal(const rclcpp_action::Goal
 rclcpp_action::CancelResponse CNavAssistant::handle_cancel( const std::shared_ptr<GoalHandleNavigate_Server> goal_handle)
 {
     RCLCPP_INFO(this->get_logger(), "Received request to cancel goal");
-    goalCancelled = true;
-    m_activeServerGoalHandle = {nullptr};
+    cancelCurrentGoal();
     mb_action_client->async_cancel_all_goals();
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void CNavAssistant::handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle)
 {
+    RCLCPP_INFO(this->get_logger(), "Accepted goal");
+    if(m_activeClientGoalHandle.get()!=nullptr)
+        cancelCurrentGoal();
     m_activeServerGoalHandle=goal_handle;
 }
 
@@ -1044,14 +1049,14 @@ void CNavAssistant::execute()
     {
         auto goal = m_activeServerGoalHandle->get_goal();
         if (verbose) 
-            RCLCPP_INFO(get_logger(), "[NavAssistant] Starting Navigation Assistant to reach: [%.2f, %.2f]", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
+            RCLCPP_INFO(get_logger(), "Starting Navigation Assistant to reach: [%.2f, %.2f]", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
         
         // Get path (robot->goal) from topology-graph node
         std::string node_start, node_end;
         std::vector<std::string> path;
 
         //1. Get starting ING node
-        topology_graph::srv::Graph::Request::SharedPtr graphRequest;
+        auto graphRequest=std::make_shared<topology_graph::srv::Graph::Request>();
         graphRequest->cmd = "GetClosestNode";    // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
         graphRequest->params.push_back(std::to_string(current_robot_pose.pose.pose.position.x));
         graphRequest->params.push_back(std::to_string(current_robot_pose.pose.pose.position.y));
@@ -1060,7 +1065,7 @@ void CNavAssistant::execute()
         
         auto future = graph_srv_client->async_send_request(graphRequest);
         auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get().get();
+        auto response = future.get();
 
         if (response->success)
         {
@@ -1079,7 +1084,7 @@ void CNavAssistant::execute()
             graphRequest->params.push_back("ING");
             future = graph_srv_client->async_send_request(graphRequest);
             result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-            response = future.get().get();
+            response = future.get();
             if (response->success)
             {
                 node_end = response->result[0];                // result: [id label type x y yaw]
@@ -1098,7 +1103,7 @@ void CNavAssistant::execute()
                     graphRequest->params.push_back(node_end);
                     future = graph_srv_client->async_send_request(graphRequest);
                     result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-                    response = future.get().get();
+                    response = future.get();
                     if (response->success)
                     {
                         path = response->result;
@@ -1269,6 +1274,7 @@ int main(int argc, char** argv)
     rclcpp::init(argc,argv);
 
     std::shared_ptr<CNavAssistant> nav_assistant = std::make_shared<CNavAssistant>("nav_assistant");
+    nav_assistant->Init();
     RCLCPP_INFO(nav_assistant->get_logger(), "[NavAssistant] Action server is ready for action!...");
 
     while(rclcpp::ok())

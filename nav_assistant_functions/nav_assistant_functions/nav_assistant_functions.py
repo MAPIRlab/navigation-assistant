@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 
 import rclpy
+from time import sleep
 from rclpy.node import Node
 from nav_assistant_msgs.srv import NavAssistantPOI, NavAssistantSetCNP
 from geometry_msgs.msg import PoseStamped, Quaternion
@@ -14,6 +15,11 @@ import matplotlib.pyplot as plt
 from math import cos, sin, radians, degrees, sqrt, atan2
 import cv2 as cv
 import sys
+
+class InternalMap:
+    info : MapMetaData
+    data : np.ndarray
+
 
 class nav_assist_functions(Node):
     # ---------------------------------------------------------------------
@@ -30,45 +36,48 @@ class nav_assist_functions(Node):
 
         # Subscribers to MAP
         self.map_sub =  self.create_subscription( OccupancyGrid, "/map", self.map_cb, 10)
-        self.currentMap = OccupancyGrid()
+        self.currentMap = InternalMap()
         self.hasMap = False
-        # Wait till map is available
-        wait_rate = self.create_rate(1)
-        while not self.hasMap:
-            self.get_logger().info( "[nav_assistant_functions] Waiting to get the occupancy Map of the environment." )
-            wait_rate.sleep()
 
         # subscribe to Global Costmap
         self.costmap_sub = self.create_subscription(OccupancyGrid, "/global_costmap/costmap", self.gcostmap_cb, 10)
-        self.currentCostMap = OccupancyGrid()
+        self.currentCostMap = InternalMap()
         self.has_global_costmap = False
+
+
+        # Wait till map is available
+        while not self.hasMap:
+            self.get_logger().info( "Waiting to get the occupancy Map of the environment." )
+            rclpy.spin_once(self, executor=None, timeout_sec=1)
+
         # Wait till CostMap is available
         while not self.has_global_costmap:
-            rclpy.loginfo( "[nav_assistant_functions] Waiting to get the Global CostMap." )
-            wait_rate.sleep()
+            self._logger.info( "Waiting to get the Global CostMap." )
+            rclpy.spin_once(self, executor=None, timeout_sec=1)
 
-        # Advertaise services
+
+        # Advertise services
         self.srv_poi = self.create_service(NavAssistantPOI, 'navigation_assistant/get_poi_related_poses', self.handle_new_poi)
         self.srv_cnp = self.create_service(NavAssistantSetCNP, 'navigation_assistant/get_cnp_pose_around', self.handle_new_cnp)
-
-        # Loop
-        self.get_logger().info()( "[nav_assistant_functions] Config done... LOOPING" )
+        self.get_logger().info( "Config done... LOOPING" )
         
 
 
     # =============================================================
     # ================           GET THE MAP       ================
     # =============================================================
-    def map_cb(self, map_msg):
+    def map_cb(self, map_msg : OccupancyGrid):
+        self._logger.info(f"Received map. Type {type(map_msg)}")
         self.hasMap = True
-        self.currentMap = map_msg
 
+        self.currentMap.info = map_msg.info 
         # Reshape map to numpy
-        try:
-            self.currentMap.data = np.array(self.currentMap.data).reshape( (self.currentMap.info.height, self.currentMap.info.width) )
-            self.currentMap.data = np.flipud(self.currentMap.data)
-        except:
-            print ("[NavAssitant-map_cb] Unexpected error when reshaping the MAP:", sys.exc_info()[0])
+        #try:
+
+        self.currentMap.data = np.array(map_msg.data).reshape( (self.currentMap.info.height, self.currentMap.info.width) )
+        self.currentMap.data = np.flipud(self.currentMap.data)
+        #except:
+        #    self._logger.error( f"[NavAssitant-map_cb] Unexpected error when reshaping the MAP:{sys.exc_info()[0]}" )
 
         #print(type(self.currentMap.data))
         #print(self.currentMap.data.shape)
@@ -83,26 +92,23 @@ class nav_assist_functions(Node):
     # =============================================================
     # ================        GET THE COSTMAP      ================
     # =============================================================
-    def gcostmap_cb(self, costmap_msg):
-        self.currentCostMap = costmap_msg
+    def gcostmap_cb(self, costmap_msg : OccupancyGrid):
         self.has_global_costmap = True
 
+        self.currentCostMap.info = costmap_msg.info
         # Reshape map to numpy
         try:
-            self.currentCostMap.data = np.array(self.currentCostMap.data).reshape( (self.currentCostMap.info.height, self.currentCostMap.info.width) )
+            self.currentCostMap.data = np.array(costmap_msg.data).reshape( (self.currentCostMap.info.height, self.currentCostMap.info.width) )
             self.currentCostMap.data = np.flipud(self.currentCostMap.data)
         except:
-            print ("[NavAssitant-gcostmap_cb] Unexpected error when reshaping the MAP:", sys.exc_info()[0])
+            self._logger.error(f"[NavAssitant-gcostmap_cb] Unexpected error when reshaping the MAP:{sys.exc_info()[0]}")
 
 
     # =============================================================
     # ================    NEW POINT OF INTEREST (SRV CALL)  =======
     # =============================================================    
-    def handle_new_poi(self,req):
-        if self.verbose: rclpy.loginfo("[nav_assistant_functions] Setting SPs and INGs for given CNP/CP" )
-
-        # Init srv response
-        res = nav_assistant_poiResponse()
+    def handle_new_poi(self,req, res):
+        if self.verbose: self._logger.info(" Setting SPs and INGs for given CNP/CP" )
 
         # Get Auxiliary points
         try:
@@ -171,11 +177,8 @@ class nav_assist_functions(Node):
     # =============================================================
     # ============    GET CNP POSE around Point (SRV call)  =======
     # =============================================================
-    def handle_new_cnp(self,req):
-        if self.verbose: rclpy.loginfo("[nav_assistant_functions] Setting pose of CNP/CP around given pose." )
-
-        # Prepare srv response
-        res = nav_assistant_set_CNPResponse()
+    def handle_new_cnp(self, req, res):
+        if self.verbose: self._logger.info(" Setting pose of CNP/CP around given pose." )
 
         # Init values
         resolution = self.currentCostMap.info.resolution                            #[m/cell]
@@ -197,14 +200,14 @@ class nav_assist_functions(Node):
             if Pimg is not None:
                 # Pimg is the location in pixels [in the cropped-img system]
 
-                #if self.verbose: rclpy.loginfo("[nav_assistant_functions] New CNP at pixles (x=%d, y=%d)[px] of the Cropped Image", int(Pimg[0]), int(Pimg[1]) )
+                #if self.verbose: self._logger.info(" New CNP at pixles (x=%d, y=%d)[px] of the Cropped Image", int(Pimg[0]), int(Pimg[1]) )
                 height, width, channels = img.shape
                 Ppx_x = seed_px[0] - int(height/2) + Pimg[0]
                 Ppx_y = seed_px[1] - int(width/2) + Pimg[1]
 
                 # Get Coordinates in meters in the "map" ref system
                 Pcnp = self.pixels_to_meters(T, [Ppx_x,Ppx_y], resolution)
-                if self.verbose: rclpy.loginfo("[nav_assistant_functions] New CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
+                if self.verbose: self._logger.info(" New CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
 
                 # Done
                 mypose = PoseStamped()
@@ -222,7 +225,7 @@ class nav_assist_functions(Node):
                 res.success = False
                 return res
         except:
-            print( "[NavAssitant-handle_new_cnp] Unexpected error:", sys.exc_info()[0])
+            self._logger.error( f"[NavAssitant-handle_new_cnp] Unexpected error:{sys.exc_info()[0]}")
             res.success = False
             return res
 
@@ -357,7 +360,7 @@ class nav_assist_functions(Node):
 
         # ASSERT we have 2 contours!
         if len(selected_contours) != 2:
-            if self.verbose: rclpy.loginfo("[nav_assistant_functions] Error detecting contours in costmap")
+            if self.verbose: self._logger.error(" Error detecting contours in costmap")
             return None
         else:
             return Pcenter
@@ -748,7 +751,7 @@ class nav_assist_functions(Node):
 
         # end-for each circle-radious
         else:
-            print('Error [get_auxiliary_passage_nodes]: SP points not found!')
+            self._logger.error('[get_auxiliary_passage_nodes]: SP points not found!')
             return None
 
 # =============================================================

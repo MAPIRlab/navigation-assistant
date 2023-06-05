@@ -58,7 +58,7 @@ protected:
 public:
     CNavAssistant(std::string name);
     ~CNavAssistant(void);
-
+    void Init();
     std::shared_ptr<const GoalHandleNavigate_Server> m_activeServerGoalHandle;
     std::shared_ptr<NavToPoseClientGoalHandle> m_activeClientGoalHandle;
 
@@ -68,6 +68,9 @@ public:
     void handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
 
 private:
+
+    nav_msgs::msg::Path m_CurrentPlan;
+    void getPlanCB(const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result);
 
     bool goalCancelled=false;
     bool checkIfCancelled() 
@@ -79,6 +82,12 @@ private:
             return true;
         }
         return false;
+    }
+
+    void cancelCurrentGoal()
+    {
+        goalCancelled = true;
+        m_activeServerGoalHandle = {nullptr};
     }
 
     //subscriber to Robot localization

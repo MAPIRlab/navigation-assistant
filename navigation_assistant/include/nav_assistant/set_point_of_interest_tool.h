@@ -7,6 +7,7 @@
 # include <QObject>
 # include <rclcpp/rclcpp.hpp>
 # include <rviz_common/tool.hpp>
+#include "rviz_default_plugins/tools/pose/pose_tool.hpp"
 #endif
 #include <nav_assistant_msgs/srv/nav_assistant_poi.hpp>
 #include <nav_assistant_msgs/srv/nav_assistant_point.hpp>
@@ -15,7 +16,7 @@
 namespace rviz_nav_assistant
 {
     // declare our new subclass of rviz::Tool
-    class SetPointOfInterestTool : public rviz_common::Tool, public rclcpp::Node
+    class RVIZ_DEFAULT_PLUGINS_PUBLIC SetPointOfInterestTool : public rviz_common::Tool, public rclcpp::Node
     {
     Q_OBJECT
     public:

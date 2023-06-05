@@ -2,12 +2,10 @@ PROJECT(topology_graph)
 
 CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
 
-# Require C++17 (for MRPT v2.0)
-if(${CMAKE_VERSION} VERSION_LESS "3.8.0")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
-else()
-        set(CMAKE_CXX_STANDARD 17)
-endif()
+
+
+set(CMAKE_BUILD_TYPE "None") 
+set(CMAKE_CXX_FLAGS "-std=c++17 -g -O0 ${CMAKE_CXX_FLAGS}")
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
