@@ -14,7 +14,7 @@ namespace rviz_nav_assistant
         // superclass to declare which key will activate the tool.
         shortcut_key_ = 'n';
 
-        topic_property_ = new rviz_common::properties::StringProperty( "Topic", "/nav_assistant/goal",
+        topic_property_ = new rviz_common::properties::StringProperty( "Topic", "nav_assistant",
                                               "The topic on which to publish navigation assitant goals.",
                                                getPropertyContainer(), SLOT( updateTopic() ), this );
     }
@@ -31,7 +31,7 @@ namespace rviz_nav_assistant
     // Allow to set the topic name in the RVIZ properties
     void SetNavGoalTool::updateTopic()
     {
-      pub_ = create_publisher<nav_assistant_msgs::action::NavAssistant_Goal>( topic_property_->getStdString(), 1 );
+      client = rclcpp_action::create_client<nav_assistant_msgs::action::NavAssistant>(this, topic_property_->getStdString());
     }
 
 
@@ -56,10 +56,10 @@ namespace rviz_nav_assistant
         goal.pose.position.x, goal.pose.position.y, goal.pose.position.z,
         goal.pose.orientation.x, goal.pose.orientation.y, goal.pose.orientation.z, goal.pose.orientation.w, theta);
 
-        nav_assistant_msgs::action::NavAssistant_Goal nav_goal;
+        nav_assistant_msgs::action::NavAssistant::Goal nav_goal;
         nav_goal.target_pose = goal;
         nav_goal.turn_before_nav = true;
-        pub_->publish(nav_goal);
+        client->async_send_goal(nav_goal);
     }
 
 }// end namespace rviz

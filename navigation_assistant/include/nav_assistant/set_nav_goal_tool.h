@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include "rviz_default_plugins/tools/pose/pose_tool.hpp"
 #include <rviz_common/properties/string_property.hpp>
 
@@ -30,7 +31,7 @@ namespace rviz_nav_assistant
       void updateTopic();
 
     private:
-      rclcpp::Publisher<nav_assistant_msgs::action::NavAssistant_Goal>::SharedPtr pub_;
+      rclcpp_action::Client<nav_assistant_msgs::action::NavAssistant>::SharedPtr client;
 
       rviz_common::properties::StringProperty* topic_property_;      //where to publish the navigation goals.
     };
