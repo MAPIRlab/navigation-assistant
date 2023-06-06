@@ -4,6 +4,8 @@
 #include <tf2/LinearMath/Vector3.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <boost/algorithm/string.hpp>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
 
 using json = nlohmann::json;
 using namespace std::placeholders;
@@ -13,10 +15,13 @@ using namespace std::placeholders;
 //----------------------------------------------------------
 
 // Robot location update
-void CNavAssistant::localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+void CNavAssistant::localizationCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     //keep the most recent robot pose = position + orientation
-    current_robot_pose = *msg;
+    geometry_msgs::msg::PoseStamped msgPose;
+    msgPose.header = msg->header;
+    msgPose.pose = msg->pose.pose;
+    current_robot_pose = transformPoseToFrame(msgPose, "map");
 }
 
 double getYaw(const geometry_msgs::msg::Pose& pose)
@@ -29,15 +34,34 @@ double getYaw(const geometry_msgs::msg::Pose& pose)
     return yaw;
 }
 
+geometry_msgs::msg::PoseStamped CNavAssistant::transformPoseToFrame(const geometry_msgs::msg::PoseStamped& pose, const std::string& target_frame)
+{
+    static tf2_ros::Buffer buffer(get_clock());
+    static tf2_ros::TransformListener listener(buffer);
+    using namespace std::chrono_literals;
+    geometry_msgs::msg::PoseStamped result;
+    try
+    {
+        result = buffer.transform(pose, target_frame, std::chrono::duration_cast<std::chrono::nanoseconds>(0.5s) );
+    }
+    catch(const std::exception& e)
+    {
+        result = pose;
+        RCLCPP_ERROR(get_logger(), "Error transforming pose: %s", e.what());
+    }
+    return result;
+    
+}
+
 //-----------------------------------------------------------
 //                    Action Server Initialization
 //----------------------------------------------------------
-CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server")
+CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m_currentGoal(get_logger())
 {
     /*! IMPORTANT
      * DEFINE all Action Servers to be used or published before executing the callback to avoid problems
      * */
-
+    
     as_ = rclcpp_action::create_server<NAS_ac::NavAssistant>(this, name, 
         std::bind(&CNavAssistant::handle_goal, this, _1, _2), 
         std::bind(&CNavAssistant::handle_cancel, this, _1),
@@ -65,11 +89,12 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server")
     nav_assist_functions_client_CNP = create_client<NAS::NavAssistantSetCNP>("navigation_assistant/get_cnp_pose_around");
 
     // Subscribers
-    localization_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/amcl_pose", 100, std::bind(&CNavAssistant::localizationCallback,this, _1) );
+    localization_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odom", 1, std::bind(&CNavAssistant::localizationCallback,this, _1) );
 
     // Publishers
     cmd_vel_publisher = create_publisher<geometry_msgs::msg::Twist>("cmd_vel",1);
     ready_publisher = create_publisher<std_msgs::msg::Bool>("/nav_assistant/ready",1);
+    path_publisher = create_publisher<nav_msgs::msg::Path>("/nav_assistant/Path",1);
 
     {
         using namespace std::chrono_literals;
@@ -150,18 +175,22 @@ void CNavAssistant::Init()
 void CNavAssistant::getPlanCB(const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result)
 {
     m_CurrentPlan = w_result.result->path;
+    RCLCPP_INFO(get_logger(), "Path calculated");
 }
 
 bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::MakePlan::Response::SharedPtr response)
 {
     GetPlan::Goal mb_request;
 
+    mb_request.use_start = true;
     mb_request.start = request->start;
     mb_request.goal = request->goal;
 
     auto goal_options = rclcpp_action::Client<GetPlan>::SendGoalOptions();
     goal_options.result_callback = std::bind(&CNavAssistant::getPlanCB, this, _1);
     
+    m_CurrentPlan.header.stamp.sec=-1;
+
     auto future = getPlanClient->async_send_goal(mb_request, goal_options); 
     auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
 
@@ -173,13 +202,22 @@ bool CNavAssistant::makePlan(NAS::MakePlan::Request::SharedPtr request, NAS::Mak
         response->valid_path = false;
         return false;
     }
-    else if (m_CurrentPlan.poses.empty() )
+    
+    rclcpp::Rate wait_rate(2);
+    while(m_CurrentPlan.header.stamp.sec == -1)
+    {
+        //wait until path is received. The spinning line only blocks until the request is accepted!
+        wait_rate.sleep();
+        rclcpp::spin_some(shared_from_this());
+    }
+    
+    if (m_CurrentPlan.poses.empty() )
     {
         if (verbose) RCLCPP_WARN(get_logger(), "[NavAssistant-turn_towards_path] Unable to get plan");
         response->valid_path = false;
         return true;
     }
-
+    path_publisher->publish(m_CurrentPlan);
     response->valid_path = true;
     response->plan = m_CurrentPlan;
     return true;
@@ -845,9 +883,7 @@ void CNavAssistant::turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal)
     auto getPlanReq=std::make_shared<NAS::MakePlan::Request>();
     auto response=std::make_shared<NAS::MakePlan::Response>();
 
-    getPlanReq->start.header.frame_id = "map";
-    getPlanReq->start.header.stamp = now();
-    getPlanReq->start.pose = current_robot_pose.pose.pose;
+    getPlanReq->start = current_robot_pose;
     // Set Goal pose
     getPlanReq->goal = pose_goal;
     
@@ -897,18 +933,19 @@ void CNavAssistant::turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal)
             }
 
             // The path does not cotains orientation, only positions, so we need to calculate the orientation between robot and target in the path
-            Ax = p.position.x - current_robot_pose.pose.pose.position.x;
-            Ay = p.position.y - current_robot_pose.pose.pose.position.y;
+            Ax = p.position.x - current_robot_pose.pose.position.x;
+            Ay = p.position.y - current_robot_pose.pose.position.y;
             double target_yaw_map = atan2(Ay,Ax);
 
             // Set goal in MoveBase
             geometry_msgs::msg::PoseStamped local_goal;
             local_goal.header = current_robot_pose.header;
-            local_goal.pose.position = current_robot_pose.pose.pose.position;
+            local_goal.pose.position = current_robot_pose.pose.position;
             tf2::Quaternion q;
             q.setRPY(0, 0, angles::normalize_angle(target_yaw_map));
             local_goal.pose.orientation = tf2::toMsg(q);
-            if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Requesting Initial Turn" );
+            if (verbose) 
+                RCLCPP_INFO(get_logger(), "Requesting Initial Turn" );
 
             // Call MoveBase (turn in place)
             move_base_nav_and_wait(local_goal);
@@ -960,60 +997,38 @@ bool CNavAssistant::move_base_cancel_and_wait(double wait_time_sec)
 // ----------------------------------------
 void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_goal)
 {
-    auto currentServerGoal = m_activeServerGoalHandle;
+    auto currentServerGoal = m_currentGoal.ServerGoalHandle;
     // request MoveBase to reach a goal
     NavToPose::Goal mb_goal;
     mb_goal.pose = pose_goal;
-    mb_goal.pose.header.frame_id="map";
+
     if (verbose) 
         RCLCPP_INFO(get_logger(), "Requesting MoveBase Navigation to [%.2f, %.2f]", mb_goal.pose.pose.position.x, mb_goal.pose.pose.position.y );
     
-    auto static response_cb = [&](std::shared_ptr<NavToPoseClientGoalHandle> goal_handle)
-    {
-        m_activeClientGoalHandle = goal_handle;
-    };
-
-    bool complete = false;
-    auto static result_cb = [&](const NavToPoseClientGoalHandle::WrappedResult& result)
-    {
-        complete = true;
-        switch (result.code) {
-        case rclcpp_action::ResultCode::SUCCEEDED:
-            RCLCPP_INFO(this->get_logger(), "NavToPose Goal was completed");
-            return;
-        case rclcpp_action::ResultCode::ABORTED:
-            RCLCPP_WARN(this->get_logger(), "NavToPose Goal was aborted");
-            return;
-        case rclcpp_action::ResultCode::CANCELED:
-            RCLCPP_WARN(this->get_logger(), "NavToPose Goal was canceled");
-            return;
-        default:
-            RCLCPP_ERROR(this->get_logger(), "NavToPose Unknown result code");
-            return;
-        }
-    };
-    
     auto goal_options = rclcpp_action::Client<NavToPose>::SendGoalOptions();
-    goal_options.result_callback = result_cb;
-    goal_options.goal_response_callback = response_cb;
+    goal_options.result_callback = std::bind(&NavigationGoal::result_cb, &m_currentGoal, _1);
+    goal_options.goal_response_callback = std::bind(&NavigationGoal::response_cb, &m_currentGoal, _1);
+    
+    
+    m_currentGoal.complete = false;
     
     auto future = mb_action_client->async_send_goal(mb_goal, goal_options);
     rclcpp::spin_until_future_complete(shared_from_this(), future);
 
-    rclcpp::Rate rate(0.5);
-    while(rclcpp::ok() && !complete)
+    rclcpp::Rate rate(10);
+    while(rclcpp::ok() && !m_currentGoal.complete && !m_currentGoal.goalCancelled)
     {
         //if there was explicit cancellation or just a new goal overwriting the current one
-        if(goalCancelled || m_activeServerGoalHandle != currentServerGoal)
+        if(m_currentGoal.goalCancelled || m_currentGoal.ServerGoalHandle != currentServerGoal)
         {
-            complete = true;
-            goalCancelled = true;
-            mb_action_client->async_cancel_goal(m_activeClientGoalHandle);
+            m_currentGoal.goalCancelled = true;
+            mb_action_client->async_cancel_goal(m_currentGoal.ClientGoalHandle);
         }
         rclcpp::spin_some(shared_from_this());
         rate.sleep();
     }
-
+    m_currentGoal.ClientGoalHandle = {nullptr};
+    m_currentGoal.complete = false;
 }
 
 
@@ -1037,9 +1052,9 @@ rclcpp_action::CancelResponse CNavAssistant::handle_cancel( const std::shared_pt
 void CNavAssistant::handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle)
 {
     RCLCPP_INFO(this->get_logger(), "Accepted goal");
-    if(m_activeClientGoalHandle.get()!=nullptr)
+    if(m_currentGoal.ClientGoalHandle.get()!=nullptr)
         cancelCurrentGoal();
-    m_activeServerGoalHandle=goal_handle;
+    m_currentGoal.ServerGoalHandle=goal_handle;
 }
 
 void CNavAssistant::execute()
@@ -1047,7 +1062,7 @@ void CNavAssistant::execute()
     // This ActionServer is a wrapper for move_base aiming at a more robust navvigation and error handling
     try
     {
-        auto goal = m_activeServerGoalHandle->get_goal();
+        auto goal = m_currentGoal.ServerGoalHandle->get_goal();
         if (verbose) 
             RCLCPP_INFO(get_logger(), "Starting Navigation Assistant to reach: [%.2f, %.2f]", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
         
@@ -1058,8 +1073,8 @@ void CNavAssistant::execute()
         //1. Get starting ING node
         auto graphRequest=std::make_shared<topology_graph::srv::Graph::Request>();
         graphRequest->cmd = "GetClosestNode";    // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
-        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.pose.position.x));
-        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.pose.position.y));
+        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.position.x));
+        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.position.y));
         graphRequest->params.push_back(std::to_string(0.0));
         graphRequest->params.push_back("ING");
         
@@ -1173,16 +1188,16 @@ void CNavAssistant::execute()
 
 
                                 //A. Initial Turn
+                                if(m_currentGoal.checkIfCancelled(shared_from_this()))
+                                    return;
                                 if (goal->turn_before_nav)
                                     turn_towards_path(i_goal);
 
-                                if(checkIfCancelled())
-                                    return;
 
                                 //B. Navigate to i_goal using MOVE_BASE!
-                                move_base_nav_and_wait(i_goal);
-                                if(checkIfCancelled())
+                                if(m_currentGoal.checkIfCancelled(shared_from_this()))
                                     return;
+                                move_base_nav_and_wait(i_goal);
                             }
                         }
                         catch (exception e)
@@ -1209,22 +1224,24 @@ void CNavAssistant::execute()
                 RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Closest ING Node (end) pose=[%.3f, %.3f]. Trying direct navigation.", goal->target_pose.pose.position.x, goal->target_pose.pose.position.y);
         }
         else if (verbose)
-            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Closest ING Node (start) pose=[%.3f, %.3f]. Trying direct navigation.", current_robot_pose.pose.pose.position.x, current_robot_pose.pose.pose.position.y );
+            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Closest ING Node (start) pose=[%.3f, %.3f]. Trying direct navigation.", current_robot_pose.pose.position.x, current_robot_pose.pose.position.y );
 
 
 
         // -------------------------------
         // NAVIGATION TO TARGET GOAL (MB)
         // -------------------------------
+        
+        if(m_currentGoal.checkIfCancelled(shared_from_this()))
+            return;
+        
         //1. Initial Turn
         if (goal->turn_before_nav)
             turn_towards_path(goal->target_pose);
-        
-        if(checkIfCancelled())
-            return;
-        rclcpp::sleep_for(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(0.2)));
 
-        if(checkIfCancelled())
+        rclcpp::spin_some(shared_from_this());
+
+        if(m_currentGoal.checkIfCancelled(shared_from_this()))
             return;
         //2. Navigate to goal
         move_base_nav_and_wait(goal->target_pose);
@@ -1280,14 +1297,14 @@ int main(int argc, char** argv)
     while(rclcpp::ok())
     {
         rclcpp::spin_some(nav_assistant);
-        if(nav_assistant->m_activeServerGoalHandle.get() != nullptr)
+        if(nav_assistant->m_currentGoal.ServerGoalHandle.get() != nullptr)
         {
-            auto currentServerGoalHandle = nav_assistant->m_activeServerGoalHandle; 
+            auto currentServerGoalHandle = nav_assistant->m_currentGoal.ServerGoalHandle; 
             nav_assistant->execute();
             
             //dont reset the variable if a new goal was received before the last one was completed
-            if(currentServerGoalHandle == nav_assistant->m_activeServerGoalHandle)
-                nav_assistant->m_activeServerGoalHandle = {nullptr};
+            if(currentServerGoalHandle == nav_assistant->m_currentGoal.ServerGoalHandle)
+                nav_assistant->m_currentGoal.ServerGoalHandle = {nullptr};
         }
     }
 
