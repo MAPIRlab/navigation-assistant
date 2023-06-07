@@ -5,7 +5,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
 
 
 set(CMAKE_BUILD_TYPE "None") 
-set(CMAKE_CXX_FLAGS "-std=c++17 -g -O0 ${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "-std=c++17 -g -O2 ${CMAKE_CXX_FLAGS}")
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)

@@ -78,7 +78,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
     save_to_file = declare_parameter<std::string>("save_to_file","");
 
 
-    makePlanServer = create_service<NAS::MakePlan>("make_plan", std::bind(&CNavAssistant::makePlan, this, _1, _2));
+    makePlanServer = create_service<NAS::MakePlan>("navigation_assistant/make_plan", std::bind(&CNavAssistant::makePlan, this, _1, _2));
 
 
     // Service clients
