@@ -108,13 +108,13 @@ class nav_assist_functions(Node):
     # ================    NEW POINT OF INTEREST (SRV CALL)  =======
     # =============================================================    
     def handle_new_poi(self,req, res):
-        if self.verbose: self._logger.info(" Setting SPs and INGs for given CNP/CP" )
+        self._logger.info(" Setting SPs and INGs for given CNP/CP" )
 
         # Get Auxiliary points
         try:
             aux_points = self.get_auxiliary_nodes([req.pose.pose.position.x, req.pose.pose.position.y]);
         except:
-            print ("[NavAssitant-get_auxiliary_nodes] Unexpected error:", sys.exc_info()[0])
+            self._logger.error(f"[NavAssitant-get_auxiliary_nodes] Unexpected error:{sys.exc_info()[0]}")
             res.success = False
             return res
 
@@ -164,7 +164,7 @@ class nav_assist_functions(Node):
                 mypose4.pose.orientation =  Quaternion()
                 res.ing.append(mypose4)
             except:
-                print ("[NavAssitant-handle_new_poi] Unexpected error:", sys.exc_info()[0])
+                self._logger.error(f"[NavAssitant-handle_new_poi] Unexpected error:{sys.exc_info()[0]}")
                 res.success = False
                 return res
         else:
@@ -178,7 +178,7 @@ class nav_assist_functions(Node):
     # ============    GET CNP POSE around Point (SRV call)  =======
     # =============================================================
     def handle_new_cnp(self, req, res):
-        if self.verbose: self._logger.info(" Setting pose of CNP/CP around given pose." )
+        self._logger.info(" Setting pose of CNP/CP around given pose." )
 
         # Init values
         resolution = self.currentCostMap.info.resolution                            #[m/cell]
@@ -207,7 +207,7 @@ class nav_assist_functions(Node):
 
                 # Get Coordinates in meters in the "map" ref system
                 Pcnp = self.pixels_to_meters(T, [Ppx_x,Ppx_y], resolution)
-                if self.verbose: self._logger.info(" New CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
+                self._logger.info(" New CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
 
                 # Done
                 mypose = PoseStamped()
@@ -221,6 +221,8 @@ class nav_assist_functions(Node):
                 res.success = True
                 return res
             else:
+                self._logger.info("Could not set CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
+
                 # CNP already exist or we are unable to set it properly
                 res.success = False
                 return res

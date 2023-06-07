@@ -811,68 +811,69 @@ bool CNavAssistant::deleteNode(std::string node_type, double pose_x, double pose
 // ----------------------------------
 bool CNavAssistant::srvCB(NAS::NavAssistantPoint::Request::SharedPtr req, NAS::NavAssistantPoint::Response::SharedPtr res)
 {
-    // This SRV implements functions to Add or Delete node nodes in the graph (topology)
-    // Get Yaw from Pose
-    double yaw_angle = getYaw(req->pose.pose);
-
-    // Add / Delete
-    if (req->action == "add")
-    {
-        // Set a new label
-        std::string label = req->type + "_" + std::to_string(counter);
-        counter ++;
-
-        // Execute action and return result
-        if ( addNode(label, req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle) )
-        {
-            if (req->type == "CP" || req->type == "CNP" || req->type == "passage")
-                regenerate_arcs();
-            return true;
-        }
-        else
-            return false;
-
-    }
-    else if (req->action == "delete")
-    {
-        if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Delete a Node," );
-        if ( deleteNode(req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle) )
-        {
-            if (req->type == "CP" || req->type == "CNP" || req->type == "passage")
-                regenerate_arcs();
-            return true;
-        }
-        else
-            return false;
-    }
-    else if (req->action == "save")
-    {
-        // Keep copy of current Graph
-        if (save_to_file != "")
-        {
-            // Save to file
-            RCLCPP_INFO(get_logger(), "[NavAssistant] Saving Graph to file [%s]", save_to_file.c_str());
-            //File contains a boost::graphviz description of the nodes and arcs
-            auto saveRequest=std::make_shared<topology_graph::srv::Graph::Request>();
-            saveRequest->cmd = "SaveGraph";    // params: [file_path]
-            saveRequest->params.clear();
-            saveRequest->params.push_back(save_to_file);
-                
-            auto future = graph_srv_client->async_send_request(saveRequest);
-            auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-            auto response = future.get();
-
-            if (!response->success)
-                RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to Save Graph from file. Skipping.");
-            return true;
-        }
-        else
-            return false;
-    }
-    return false;
+    pointRequestQueue.push_back(req);
+    return true;
 }
 
+void CNavAssistant::HandleGraphRequests()
+{
+    while(!pointRequestQueue.empty())
+    {
+        auto req = pointRequestQueue.front();
+        pointRequestQueue.pop_front();
 
+        // This SRV implements functions to Add or Delete node nodes in the graph (topology)
+        // Get Yaw from Pose
+        double yaw_angle = getYaw(req->pose.pose);
+
+        // Add / Delete
+        if (req->action == "add")
+        {
+            // Set a new label
+            std::string label = req->type + "_" + std::to_string(counter);
+            counter ++;
+            if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Add a Node," );
+
+            // Execute action and return result
+            if ( addNode(label, req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle) )
+            {
+                if (req->type == "CP" || req->type == "CNP" || req->type == "passage")
+                    regenerate_arcs();
+            }
+
+        }
+        else if (req->action == "delete")
+        {
+            if (verbose) RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Delete a Node," );
+            if ( deleteNode(req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle) )
+            {
+                if (req->type == "CP" || req->type == "CNP" || req->type == "passage")
+                    regenerate_arcs();
+            }
+        }
+        else if (req->action == "save")
+        {
+            // Keep copy of current Graph
+            if (save_to_file != "")
+            {
+                // Save to file
+                RCLCPP_INFO(get_logger(), "[NavAssistant] Saving Graph to file [%s]", save_to_file.c_str());
+                //File contains a boost::graphviz description of the nodes and arcs
+                auto saveRequest=std::make_shared<topology_graph::srv::Graph::Request>();
+                saveRequest->cmd = "SaveGraph";    // params: [file_path]
+                saveRequest->params.clear();
+                saveRequest->params.push_back(save_to_file);
+                    
+                auto future = graph_srv_client->async_send_request(saveRequest);
+                auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+                auto response = future.get();
+
+                if (!response->success)
+                    RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to Save Graph from file. Skipping.");
+            }
+        }
+    }
+}
 
 // ----------------------------------
 // Turn in place before Navigation  -
@@ -1037,7 +1038,8 @@ void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_
 //=================================================================
 rclcpp_action::GoalResponse CNavAssistant::handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const NAS_ac::NavAssistant::Goal> goal)
 {
-    RCLCPP_INFO(this->get_logger(), "Received goal request");
+    if(verbose)
+        RCLCPP_INFO(this->get_logger(), "Received goal request");
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
@@ -1051,7 +1053,8 @@ rclcpp_action::CancelResponse CNavAssistant::handle_cancel( const std::shared_pt
 
 void CNavAssistant::handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle)
 {
-    RCLCPP_INFO(this->get_logger(), "Accepted goal");
+    if(verbose)
+        RCLCPP_INFO(this->get_logger(), "Accepted goal");
     if(m_currentGoal.ClientGoalHandle.get()!=nullptr)
         cancelCurrentGoal();
     m_currentGoal.ServerGoalHandle=goal_handle;
@@ -1245,6 +1248,9 @@ void CNavAssistant::execute()
             return;
         //2. Navigate to goal
         move_base_nav_and_wait(goal->target_pose);
+
+        //reset the cancelled flag if the cancellation happened after the second goal was sent
+        m_currentGoal.checkIfCancelled(shared_from_this());
     }
 
     catch (exception e)
@@ -1294,9 +1300,12 @@ int main(int argc, char** argv)
     nav_assistant->Init();
     RCLCPP_INFO(nav_assistant->get_logger(), "[NavAssistant] Action server is ready for action!...");
 
+    rclcpp::Rate rate(20);
     while(rclcpp::ok())
     {
         rclcpp::spin_some(nav_assistant);
+        nav_assistant->HandleGraphRequests();
+
         if(nav_assistant->m_currentGoal.ServerGoalHandle.get() != nullptr)
         {
             auto currentServerGoalHandle = nav_assistant->m_currentGoal.ServerGoalHandle; 
@@ -1306,6 +1315,7 @@ int main(int argc, char** argv)
             if(currentServerGoalHandle == nav_assistant->m_currentGoal.ServerGoalHandle)
                 nav_assistant->m_currentGoal.ServerGoalHandle = {nullptr};
         }
+        rate.sleep();
     }
 
     return 0;

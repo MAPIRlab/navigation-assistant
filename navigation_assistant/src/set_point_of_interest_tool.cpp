@@ -77,7 +77,7 @@ namespace rviz_nav_assistant
             Ogre::Plane ground_plane( Ogre::Vector3::UNIT_Z, 0.0f );
             if( context_->getViewPicker()->get3DPoint(event.panel, event.x, event.y, intersection))
             {
-                nav_assistant_msgs::srv::NavAssistantPoint::Request::SharedPtr request;
+                auto request = std::make_shared<nav_assistant_msgs::srv::NavAssistantPoint::Request>();
                 if (event.shift())
                     request->action = "delete";
                 else
@@ -87,7 +87,7 @@ namespace rviz_nav_assistant
                 request->pose.pose.position.y = intersection.y;
                 request->pose.pose.position.z = 0.0;
                 request->pose.pose.orientation.w = 1.0;
-                //ROS_INFO("[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", srv_call.request.type.c_str() , intersection.x, intersection.y );
+                RCLCPP_INFO(get_logger(), "[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", request->type.c_str() , intersection.x, intersection.y );
 
                 nav_assist_srv_client->async_send_request(request);
             }
@@ -99,7 +99,7 @@ namespace rviz_nav_assistant
             Ogre::Plane ground_plane( Ogre::Vector3::UNIT_Z, 0.0f );
             if( context_->getViewPicker()->get3DPoint(event.panel, event.x, event.y, intersection) )
             {
-                nav_assistant_msgs::srv::NavAssistantPoint::Request::SharedPtr request;
+                auto request = std::make_shared<nav_assistant_msgs::srv::NavAssistantPoint::Request>();
                 if (event.shift())
                     request->action = "delete";
                 else
@@ -109,9 +109,10 @@ namespace rviz_nav_assistant
                 request->pose.pose.position.y = intersection.y;
                 request->pose.pose.position.z = 0.0;
                 request->pose.pose.orientation.w = 1.0;
-                //ROS_INFO("[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", srv_call.request.type.c_str() , intersection.x, intersection.y );
+                RCLCPP_INFO(get_logger(), "[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", request->type.c_str() , intersection.x, intersection.y );
                 nav_assist_srv_client->async_send_request(request);
             }
+
         }
         else if (event.middleDown())
         {

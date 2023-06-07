@@ -20,6 +20,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <angles/angles.h>
+#include <deque>
 
 // move_base (AS)
 #include <nav2_msgs/action/navigate_to_pose.hpp>
@@ -119,7 +120,10 @@ public:
     NavigationGoal m_currentGoal;
 
 
+    void HandleGraphRequests();
 private:
+    std::deque<NAS::NavAssistantPoint::Request::SharedPtr> pointRequestQueue;
+
 
     geometry_msgs::msg::PoseStamped transformPoseToFrame(const geometry_msgs::msg::PoseStamped& pose, const std::string& target_frame); 
 
