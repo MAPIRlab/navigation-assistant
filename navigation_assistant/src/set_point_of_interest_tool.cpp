@@ -50,7 +50,7 @@ namespace rviz_nav_assistant
             else if ( event->key() == Qt::Key_Enter || event->key() == Qt::Key_Return)
             {
                 //Save graph
-                nav_assistant_msgs::srv::NavAssistantPoint::Request::SharedPtr request;
+                auto request = std::make_shared<nav_assistant_msgs::srv::NavAssistantPoint::Request>();
                 request->action = "save";
                 auto future = nav_assist_srv_client->async_send_request(request);
             }
