@@ -15,7 +15,6 @@
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
-#include <nav_msgs/msg/odometry.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -140,8 +139,8 @@ private:
     }
 
     //subscriber to Robot localization
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr localization_sub_;
-    void localizationCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr localization_sub_;
+    void localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
     geometry_msgs::msg::PoseStamped current_robot_pose;
 
     // Make:plan service client (to estimate paths)

@@ -35,11 +35,6 @@ protected:
     // The graph!
     CAHGraph my_graph;
 
-    // Robot localization
-    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr localization_sub;
-    void localizationCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
-    geometry_msgs::msg::PoseWithCovarianceStamped current_robot_pose;
-
     // Make:plan service client
     rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;    
 

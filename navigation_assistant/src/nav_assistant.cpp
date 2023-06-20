@@ -15,7 +15,7 @@ using namespace std::placeholders;
 //----------------------------------------------------------
 
 // Robot location update
-void CNavAssistant::localizationCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+void CNavAssistant::localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
 {
     //keep the most recent robot pose = position + orientation
     geometry_msgs::msg::PoseStamped msgPose;
@@ -76,6 +76,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
     force_CP_as_additional_ANP = declare_parameter<bool>("force_CP_as_additional_ANP",  false);
     init_from_file = declare_parameter<std::string>("init_from_file","");
     save_to_file = declare_parameter<std::string>("save_to_file","");
+    std::string localization_topic = declare_parameter<std::string>("localization_topic","/amcl_pose");
 
 
     makePlanServer = create_service<NAS::MakePlan>("navigation_assistant/make_plan", std::bind(&CNavAssistant::makePlan, this, _1, _2));
@@ -84,17 +85,16 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
     // Service clients
     mb_action_client = rclcpp_action::create_client<NavToPose>(this, "navigate_to_pose");
     getPlanClient = rclcpp_action::create_client<GetPlan>(this, "compute_path_to_pose");  // only accounts for global_costmap but works at all times
-    graph_srv_client = create_client<topology_graph::srv::Graph>("topology_graph/graph");    // Graph service client
+    graph_srv_client = create_client<topology_graph::srv::Graph>("/topology_graph/graph");    // Graph service client
     nav_assist_functions_client_POI = create_client<NAS::NavAssistantPOI>("navigation_assistant/get_poi_related_poses");
     nav_assist_functions_client_CNP = create_client<NAS::NavAssistantSetCNP>("navigation_assistant/get_cnp_pose_around");
 
     // Subscribers
-    localization_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odom", 1, std::bind(&CNavAssistant::localizationCallback,this, _1) );
-
+    localization_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(localization_topic, 1, std::bind(&CNavAssistant::localizationCallback,this, _1) );
     // Publishers
     cmd_vel_publisher = create_publisher<geometry_msgs::msg::Twist>("cmd_vel",1);
-    ready_publisher = create_publisher<std_msgs::msg::Bool>("/nav_assistant/ready",1);
-    path_publisher = create_publisher<nav_msgs::msg::Path>("/nav_assistant/Path",1);
+    ready_publisher = create_publisher<std_msgs::msg::Bool>("nav_assistant/ready",1);
+    path_publisher = create_publisher<nav_msgs::msg::Path>("nav_assistant/Path",1);
 
     {
         using namespace std::chrono_literals;

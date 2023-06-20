@@ -98,15 +98,6 @@ Action string_to_enum(std::string action_str)
 
 
 
-// ----------------------
-// Robot location update
-// ----------------------
-void CGraphWrapper::localizationCB(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
-{
-    //keep the most recent robot pose = position + orientation
-    current_robot_pose = *msg;
-}
-
 
 // ------------------
 // CGraphWrapper
@@ -122,15 +113,16 @@ CGraphWrapper::CGraphWrapper() : Node("Topology_graph")
     path_pub = create_publisher<nav_msgs::msg::Path>("topology_graph_paths", 1);
         
     // Make plan service client
-    getPlanClient = rclcpp_action::create_client<GetPlan>(this, "compute_path_to_pose");
+    std::string get_plan_server = declare_parameter<std::string>("get_plan_server", "compute_path_to_pose");
+    getPlanClient = rclcpp_action::create_client<GetPlan>(this, get_plan_server);
+    
+    
     using namespace std::chrono_literals;
     while ( rclcpp::ok() && !getPlanClient->wait_for_action_server(5.0s) )
         spdlog::warn("[topology_graph] Waiting for move_base MAKE_PLAN srv to come online.");
 
     // Ropot pose subscriber
     using namespace std::placeholders;
-    localization_sub = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/amcl_pose",100, std::bind(&CGraphWrapper::localizationCB, this, _1) );
-
     // Advertise service
     service = create_service<topology_graph::srv::Graph>("topology_graph/graph", std::bind(&CGraphWrapper::srvCB, this, _1, _2) );
 

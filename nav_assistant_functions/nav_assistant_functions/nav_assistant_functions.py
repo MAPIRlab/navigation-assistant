@@ -35,12 +35,12 @@ class nav_assist_functions(Node):
 
 
         # Subscribers to MAP
-        self.map_sub =  self.create_subscription( OccupancyGrid, "/map", self.map_cb, 10)
+        self.map_sub =  self.create_subscription( OccupancyGrid, "map", self.map_cb, 10)
         self.currentMap = InternalMap()
         self.hasMap = False
 
         # subscribe to Global Costmap
-        self.costmap_sub = self.create_subscription(OccupancyGrid, "/global_costmap/costmap", self.gcostmap_cb, 10)
+        self.costmap_sub = self.create_subscription(OccupancyGrid,  "global_costmap/costmap", self.gcostmap_cb, 10)
         self.currentCostMap = InternalMap()
         self.has_global_costmap = False
 
