@@ -15,25 +15,25 @@
 namespace rviz_nav_assistant
 {
     // Every tool which can be added to the tool bar is a subclass of rviz::Tool (or another Class inheriting from it)
-    class RVIZ_DEFAULT_PLUGINS_PUBLIC SetNavGoalTool: public rviz_default_plugins::tools::PoseTool, public rclcpp::Node
+    class RVIZ_DEFAULT_PLUGINS_PUBLIC SetNavGoalTool : public rviz_default_plugins::tools::PoseTool, public rclcpp::Node
     {
-    Q_OBJECT
+        Q_OBJECT
     public:
-      SetNavGoalTool();
-      virtual ~SetNavGoalTool() {}
+        SetNavGoalTool();
+        virtual ~SetNavGoalTool() {}
 
-      virtual void onInitialize();
+        virtual void onInitialize();
 
     private:
-      virtual void onPoseSet(double x, double y, double theta);
+        virtual void onPoseSet(double x, double y, double theta);
 
     private Q_SLOTS:
-      void updateTopic();
+        void updateTopic();
 
     private:
-      rclcpp_action::Client<nav_assistant_msgs::action::NavAssistant>::SharedPtr client;
+        rclcpp_action::Client<nav_assistant_msgs::action::NavAssistant>::SharedPtr client;
 
-      rviz_common::properties::StringProperty* topic_property_;      //where to publish the navigation goals.
+        rviz_common::properties::StringProperty* topic_property_;      //where to publish the navigation goals.
     };
 
 }

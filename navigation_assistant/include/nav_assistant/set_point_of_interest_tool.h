@@ -18,23 +18,23 @@ namespace rviz_nav_assistant
     // declare our new subclass of rviz::Tool
     class RVIZ_DEFAULT_PLUGINS_PUBLIC SetPointOfInterestTool : public rviz_common::Tool, public rclcpp::Node
     {
-    Q_OBJECT
+        Q_OBJECT
     public:
-      SetPointOfInterestTool();
-      virtual ~SetPointOfInterestTool() {}
+        SetPointOfInterestTool();
+        virtual ~SetPointOfInterestTool() {}
 
-      virtual void onInitialize();
+        virtual void onInitialize();
 
-      virtual void activate();
+        virtual void activate();
 
-      virtual void deactivate();
+        virtual void deactivate();
 
-      virtual int processKeyEvent(QKeyEvent *event, rviz_common::RenderPanel *panel);
-      virtual int processMouseEvent(rviz_common::ViewportMouseEvent& event) override;
+        virtual int processKeyEvent(QKeyEvent* event, rviz_common::RenderPanel* panel);
+        virtual int processMouseEvent(rviz_common::ViewportMouseEvent& event) override;
 
     private:
-      rclcpp::Client<nav_assistant_msgs::srv::NavAssistantPoint>::SharedPtr nav_assist_srv_client;
-      bool shift_down;
+        rclcpp::Client<nav_assistant_msgs::srv::NavAssistantPoint>::SharedPtr nav_assist_srv_client;
+        bool shift_down;
     };
 
 }

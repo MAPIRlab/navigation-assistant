@@ -36,7 +36,7 @@ protected:
     CAHGraph my_graph;
 
     // Make:plan service client
-    rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;    
+    rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;
 
     // Service offered
     rclcpp::Service<topology_graph::srv::Graph>::SharedPtr service;
@@ -47,7 +47,7 @@ protected:
     double get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_origin, geometry_msgs::msg::Pose pose_goal, std::vector<std::string> avoiding_node_types);
     bool segment_intersect_node(geometry_msgs::msg::Pose segment_ini, geometry_msgs::msg::Pose segment_end, std::vector<std::string> sp_list);
     bool get_line_intersection(float p0_x, float p0_y, float p1_x, float p1_y,
-        float p2_x, float p2_y, float p3_x, float p3_y, float *i_x, float *i_y);
+        float p2_x, float p2_y, float p3_x, float p3_y, float* i_x, float* i_y);
 
     // RViz stuff
     void DrawNode(size_t id, string node_label, string node_type, double x, double y, double yaw);
@@ -55,10 +55,10 @@ protected:
     void DrawSegment_intersection(geometry_msgs::msg::Point p1, geometry_msgs::msg::Point q1, geometry_msgs::msg::Point p2, geometry_msgs::msg::Point q2);
 
     int marker_id;
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub; 
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub;
     visualization_msgs::msg::MarkerArray graphMarkerList;
-    
+
     // debug
     std::vector<nav_msgs::msg::Path> free_paths;
     int num_path;

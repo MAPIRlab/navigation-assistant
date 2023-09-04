@@ -32,8 +32,8 @@
 
 using namespace std;
 using json = nlohmann::json;
-namespace NAS=nav_assistant_msgs::srv;
-namespace NAS_ac=nav_assistant_msgs::action;
+namespace NAS = nav_assistant_msgs::srv;
+namespace NAS_ac = nav_assistant_msgs::action;
 typedef rclcpp_action::ServerGoalHandle<NAS_ac::NavAssistant> GoalHandleNavigate_Server;
 
 typedef nav2_msgs::action::NavigateToPose NavToPose;
@@ -62,8 +62,8 @@ public:
     void Init();
 
     void execute();
-    rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const NAS_ac::NavAssistant::Goal> goal);
-    rclcpp_action::CancelResponse handle_cancel( const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
+    rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID& uuid, std::shared_ptr<const NAS_ac::NavAssistant::Goal> goal);
+    rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
     void handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
 
 
@@ -77,12 +77,12 @@ public:
         std::shared_ptr<const GoalHandleNavigate_Server> ServerGoalHandle;
         std::shared_ptr<NavToPoseClientGoalHandle> ClientGoalHandle;
         bool complete = false;
-        bool goalCancelled=false;
+        bool goalCancelled = false;
 
-        bool checkIfCancelled(std::shared_ptr<rclcpp::Node> node) 
+        bool checkIfCancelled(std::shared_ptr<rclcpp::Node> node)
         {
             rclcpp::spin_some(node);
-            if(goalCancelled)
+            if (goalCancelled)
             {
                 RCLCPP_WARN(logger, "Goal has been cancelled by the client");
                 goalCancelled = false;
@@ -91,7 +91,7 @@ public:
             return false;
         }
 
-        void response_cb (std::shared_ptr<NavToPoseClientGoalHandle> goal_handle)
+        void response_cb(std::shared_ptr<NavToPoseClientGoalHandle> goal_handle)
         {
             ClientGoalHandle = goal_handle;
         };
@@ -124,18 +124,18 @@ private:
     std::deque<NAS::NavAssistantPoint::Request::SharedPtr> pointRequestQueue;
 
 
-    geometry_msgs::msg::PoseStamped transformPoseToFrame(const geometry_msgs::msg::PoseStamped& pose, const std::string& target_frame); 
+    geometry_msgs::msg::PoseStamped transformPoseToFrame(const geometry_msgs::msg::PoseStamped& pose, const std::string& target_frame);
 
     nav_msgs::msg::Path m_CurrentPlan;
     void getPlanCB(const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result);
 
     void cancelCurrentGoal()
     {
-        if(m_currentGoal.ClientGoalHandle.get()!=nullptr)
+        if (m_currentGoal.ClientGoalHandle.get() != nullptr)
             mb_action_client->async_cancel_goal(m_currentGoal.ClientGoalHandle);
         m_currentGoal.goalCancelled = true;
-        m_currentGoal.ServerGoalHandle = {nullptr};
-        m_currentGoal.ClientGoalHandle = {nullptr};
+        m_currentGoal.ServerGoalHandle = { nullptr };
+        m_currentGoal.ClientGoalHandle = { nullptr };
     }
 
     //subscriber to Robot localization
@@ -145,9 +145,9 @@ private:
 
     // Make:plan service client (to estimate paths)
     rclcpp::Client<topology_graph::srv::Graph>::SharedPtr graph_srv_client;
-    rclcpp::Client<NAS::NavAssistantPOI>::SharedPtr nav_assist_functions_client_POI; 
+    rclcpp::Client<NAS::NavAssistantPOI>::SharedPtr nav_assist_functions_client_POI;
     rclcpp::Client<NAS::NavAssistantSetCNP>::SharedPtr nav_assist_functions_client_CNP;
-    
+
     rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;
     rclcpp::Service<NAS::MakePlan>::SharedPtr makePlanServer;
 
