@@ -48,7 +48,7 @@ protected:
     std::string action_name_;
 
     // Offer an Action Server (Navigation)
-    rclcpp_action::Server<NAS_ac::NavAssistant>::SharedPtr as_;
+    rclcpp_action::Server<NAS_ac::NavAssistant>::SharedPtr main_actionServer;
 
     // Offer a Service (Add navigation goals)
     rclcpp::Service<NAS::NavAssistantPoint>::SharedPtr service;
