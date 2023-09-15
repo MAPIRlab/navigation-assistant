@@ -74,25 +74,15 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
 	force_CP_as_additional_ANP = declare_parameter<bool>("force_CP_as_additional_ANP", false);
 	init_from_file = declare_parameter<std::string>("init_from_file", "");
 	save_to_file = declare_parameter<std::string>("save_to_file", "");
-	std::string localization_topic = declare_parameter<std::string>("localization_topic", "/amcl_pose");
+	std::string localization_topic = declare_parameter<std::string>("localization_topic", "amcl_pose");
 
 	makePlanServer = create_service<NAS::MakePlan>("navigation_assistant/make_plan", std::bind(&CNavAssistant::makePlan, this, _1, _2));
 
-	{
-		std::string _namespace = get_namespace();
-		// handle the empty namespace
-		if (_namespace == "/")
-			_namespace = "";
-
-		std::string as_name = (_namespace + "/" + name);
-		RCLCPP_INFO(get_logger(), "Advertising navigation ActionServer: %s", as_name.c_str());
-		RCLCPP_INFO(get_logger(), "Advertising \"make plan\" Service: %s", makePlanServer->get_service_name());
-	}
 
 	// Service clients
 	mb_action_client = rclcpp_action::create_client<NavToPose>(this, "navigate_to_pose");
 	getPlanClient = rclcpp_action::create_client<GetPlan>(this, "compute_path_to_pose");   // only accounts for global_costmap but works at all times
-	graph_srv_client = create_client<topology_graph::srv::Graph>("/topology_graph/graph"); // Graph service client
+	graph_srv_client = create_client<topology_graph::srv::Graph>("topology_graph/graph"); // Graph service client
 	nav_assist_functions_client_POI = create_client<NAS::NavAssistantPOI>("navigation_assistant/get_poi_related_poses");
 	nav_assist_functions_client_CNP = create_client<NAS::NavAssistantSetCNP>("navigation_assistant/get_cnp_pose_around");
 
@@ -102,6 +92,19 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
 	cmd_vel_publisher = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 1);
 	ready_publisher = create_publisher<std_msgs::msg::Bool>("nav_assistant/ready", 1);
 	path_publisher = create_publisher<nav_msgs::msg::Path>("nav_assistant/Path", 1);
+
+	//log some info
+	{
+		std::string _namespace = get_namespace();
+		// handle the empty namespace
+		if (_namespace == "/")
+			_namespace = "";
+
+		std::string as_name = (_namespace + "/" + name);
+		RCLCPP_INFO(get_logger(), "Advertising navigation ActionServer: %s", as_name.c_str());
+		RCLCPP_INFO(get_logger(), "Advertising \"make plan\" Service: %s", makePlanServer->get_service_name());
+		RCLCPP_INFO(get_logger(), "Listening to localization topic: %s", localization_sub_->get_topic_name());
+	}
 
 	{
 		using namespace std::chrono_literals;
