@@ -3,7 +3,7 @@ project(navigation_assistant)
 
 
 set(CMAKE_BUILD_TYPE "None") 
-set(CMAKE_CXX_FLAGS "-std=c++17 -g -O2 ${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "-std=c++17 -g -O0 ${CMAKE_CXX_FLAGS}")
 
 
 
@@ -31,7 +31,7 @@ find_package(rviz_ogre_vendor REQUIRED)
 include_directories(include/nav_assistant)
 
 ## MAIN NODE
-add_executable(nav_assistant_node src/nav_assistant.cpp)
+add_executable(nav_assistant_node src/nav_assistant.cpp src/graph_actions.cpp)
 
 ament_target_dependencies(nav_assistant_node
     rclcpp
