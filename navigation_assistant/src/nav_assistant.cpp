@@ -208,9 +208,7 @@ bool CNavAssistant::makePlan_sync(NAS::MakePlan::Request& request, NAS::MakePlan
 	mb_request.goal = request.goal;
 
 	//send the "make plan" goal to nav2 and wait until the response comes back
-	nav_msgs::msg::Path m_CurrentPlan;
-	constexpr int PLAN_NOT_RECEIVED = -1;
-	m_CurrentPlan.header.stamp.sec = PLAN_NOT_RECEIVED;
+	std::optional<nav_msgs::msg::Path> m_CurrentPlan = std::nullopt;
 
 	auto callback = [&m_CurrentPlan, this](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result)
 		{
@@ -235,22 +233,22 @@ bool CNavAssistant::makePlan_sync(NAS::MakePlan::Request& request, NAS::MakePlan
 
 	// wait until path is received. The spin-until-future-complete line only blocks until the request is accepted!
 	rclcpp::Rate wait_rate(2);
-	while (m_CurrentPlan.header.stamp.sec == PLAN_NOT_RECEIVED)
+	while (!m_CurrentPlan.has_value())
 	{
 		wait_rate.sleep();
 		rclcpp::spin_some(shared_from_this());
 	}
 
-	if (m_CurrentPlan.poses.empty())
+	if (m_CurrentPlan.value().poses.empty())
 	{
 		if (verbose)
 			RCLCPP_WARN(get_logger(), "[NavAssistant-turn_towards_path] Unable to get plan");
 		response.valid_path = false;
 		return true;
 	}
-	path_publisher->publish(m_CurrentPlan);
+	path_publisher->publish(m_CurrentPlan.value());
 	response.valid_path = true;
-	response.plan = m_CurrentPlan;
+	response.plan = m_CurrentPlan.value();
 	return true;
 }
 
