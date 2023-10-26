@@ -53,7 +53,7 @@ namespace rviz_nav_assistant
             goal.pose.orientation.x, goal.pose.orientation.y, goal.pose.orientation.z, goal.pose.orientation.w, theta);
 
         nav_assistant_msgs::action::NavAssistant::Goal nav_goal;
-        nav_goal.target_pose = goal;
+        nav_goal.pose = goal;
         nav_goal.turn_before_nav = true;
         client->async_send_goal(nav_goal);
     }

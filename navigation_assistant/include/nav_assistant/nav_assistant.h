@@ -1,6 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
-#include <fstream>      // std::ofstream
-#include <math.h>       /* atan2 */
+#include <fstream> // std::ofstream
+#include <math.h>  /* atan2 */
 
 // actionlib
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -38,7 +38,6 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 
-
 using namespace std;
 using json = nlohmann::json;
 namespace NAS = nav_assistant_msgs::srv;
@@ -50,150 +49,145 @@ typedef rclcpp_action::ClientGoalHandle<NavToPose> NavToPoseClientGoalHandle;
 
 typedef nav2_msgs::action::ComputePathToPose GetPlan;
 
-
 class CNavAssistant : public rclcpp::Node
 {
 protected:
-	std::string action_name_;
+    std::string action_name_;
 
-	// Offer an Action Server (Navigation)
-	rclcpp_action::Server<NAS_ac::NavAssistant>::SharedPtr main_actionServer;
+    // Offer an Action Server (Navigation)
+    rclcpp_action::Server<NAS_ac::NavAssistant>::SharedPtr main_actionServer;
 
-	// Offer a Service (Add navigation goals)
-	rclcpp::Service<NAS::NavAssistantPoint>::SharedPtr addpointService;
-	bool addPointCB(NAS::NavAssistantPoint::Request::SharedPtr req, NAS::NavAssistantPoint::Response::SharedPtr res);
-	bool addNode(std::string node_label, std::string node_type, double pose_x, double pose_y, double pose_yaw);
-	bool deleteNode(std::string node_type, double pose_x, double pose_y, double pose_yaw);
+    // Offer a Service (Add navigation goals)
+    rclcpp::Service<NAS::NavAssistantPoint>::SharedPtr addpointService;
+    bool addPointCB(NAS::NavAssistantPoint::Request::SharedPtr req, NAS::NavAssistantPoint::Response::SharedPtr res);
+    bool addNode(std::string node_label, std::string node_type, double pose_x, double pose_y, double pose_yaw);
+    bool deleteNode(std::string node_type, double pose_x, double pose_y, double pose_yaw);
 
 public:
-	CNavAssistant(std::string name);
-	~CNavAssistant(void);
-	void Init();
+    CNavAssistant(std::string name);
+    ~CNavAssistant(void);
+    void Init();
 
-	void execute();
-	rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID& uuid, std::shared_ptr<const NAS_ac::NavAssistant::Goal> goal);
-	rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
-	void handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
+    void execute();
+    rclcpp_action::GoalResponse handle_goal(const rclcpp_action::GoalUUID& uuid, std::shared_ptr<const NAS_ac::NavAssistant::Goal> goal);
+    rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
+    void handle_accepted(const std::shared_ptr<GoalHandleNavigate_Server> goal_handle);
 
+    class NavigationGoal
+    {
+    public:
+        rclcpp::Logger logger;
+        NavigationGoal(rclcpp::Logger log) : logger(log)
+        {
+        }
 
-	class NavigationGoal
-	{
-	public:
-		rclcpp::Logger logger;
-		NavigationGoal(rclcpp::Logger log) : logger(log)
-		{}
+        std::shared_ptr<GoalHandleNavigate_Server> ServerGoalHandle;
+        std::shared_ptr<NavToPoseClientGoalHandle> ClientGoalHandle;
+        bool complete = false;
+        bool goalCancelled = false;
 
-		std::shared_ptr<const GoalHandleNavigate_Server> ServerGoalHandle;
-		std::shared_ptr<NavToPoseClientGoalHandle> ClientGoalHandle;
-		bool complete = false;
-		bool goalCancelled = false;
+        bool checkIfCancelled(std::shared_ptr<rclcpp::Node> node)
+        {
+            rclcpp::spin_some(node);
+            if (goalCancelled)
+            {
+                RCLCPP_WARN(logger, "Goal has been cancelled by the client");
+                goalCancelled = false;
+                return true;
+            }
+            return false;
+        }
 
-		bool checkIfCancelled(std::shared_ptr<rclcpp::Node> node)
-		{
-			rclcpp::spin_some(node);
-			if (goalCancelled)
-			{
-				RCLCPP_WARN(logger, "Goal has been cancelled by the client");
-				goalCancelled = false;
-				return true;
-			}
-			return false;
-		}
+        void response_cb(std::shared_ptr<NavToPoseClientGoalHandle> goal_handle)
+        {
+            ClientGoalHandle = goal_handle;
+        };
 
-		void response_cb(std::shared_ptr<NavToPoseClientGoalHandle> goal_handle)
-		{
-			ClientGoalHandle = goal_handle;
-		};
+        void result_cb(const NavToPoseClientGoalHandle::WrappedResult& result)
+        {
+            complete = true;
+            switch (result.code)
+            {
+            case rclcpp_action::ResultCode::SUCCEEDED:
+                RCLCPP_INFO(logger, "NavToPose Goal was completed");
+                return;
+            case rclcpp_action::ResultCode::ABORTED:
+                RCLCPP_WARN(logger, "NavToPose Goal was aborted");
+                return;
+            case rclcpp_action::ResultCode::CANCELED:
+                RCLCPP_WARN(logger, "NavToPose Goal was canceled");
+                return;
+            default:
+                RCLCPP_ERROR(logger, "NavToPose Unknown result code");
+                return;
+            }
+        };
+    };
 
-		void result_cb(const NavToPoseClientGoalHandle::WrappedResult& result)
-		{
-			complete = true;
-			switch (result.code) {
-			case rclcpp_action::ResultCode::SUCCEEDED:
-				RCLCPP_INFO(logger, "NavToPose Goal was completed");
-				return;
-			case rclcpp_action::ResultCode::ABORTED:
-				RCLCPP_WARN(logger, "NavToPose Goal was aborted");
-				return;
-			case rclcpp_action::ResultCode::CANCELED:
-				RCLCPP_WARN(logger, "NavToPose Goal was canceled");
-				return;
-			default:
-				RCLCPP_ERROR(logger, "NavToPose Unknown result code");
-				return;
-			}
-		};
-	};
+    NavigationGoal m_currentGoal;
 
-	NavigationGoal m_currentGoal;
+    void HandleGraphRequests();
 
-
-	void HandleGraphRequests();
 private:
-	std::deque<NAS::NavAssistantPoint::Request::SharedPtr> pointRequestQueue;
+    std::deque<NAS::NavAssistantPoint::Request::SharedPtr> pointRequestQueue;
 
+    geometry_msgs::msg::PoseStamped transformPoseToFrame(const geometry_msgs::msg::PoseStamped& pose, const std::string& target_frame);
 
-	geometry_msgs::msg::PoseStamped transformPoseToFrame(const geometry_msgs::msg::PoseStamped& pose, const std::string& target_frame);
+    void cancelCurrentGoal()
+    {
+        if (m_currentGoal.ClientGoalHandle.get() != nullptr)
+            mb_action_client->async_cancel_goal(m_currentGoal.ClientGoalHandle);
+        m_currentGoal.goalCancelled = true;
+        m_currentGoal.ServerGoalHandle = {nullptr};
+        m_currentGoal.ClientGoalHandle = {nullptr};
+    }
 
-	void cancelCurrentGoal()
-	{
-		if (m_currentGoal.ClientGoalHandle.get() != nullptr)
-			mb_action_client->async_cancel_goal(m_currentGoal.ClientGoalHandle);
-		m_currentGoal.goalCancelled = true;
-		m_currentGoal.ServerGoalHandle = { nullptr };
-		m_currentGoal.ClientGoalHandle = { nullptr };
-	}
+    // subscriber to Robot localization
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr localization_sub_;
+    void localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
+    geometry_msgs::msg::PoseStamped current_robot_pose;
 
-	//subscriber to Robot localization
-	rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr localization_sub_;
-	void localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
-	geometry_msgs::msg::PoseStamped current_robot_pose;
+    // Make:plan service client (to estimate paths)
+    rclcpp::Client<topology_graph::srv::Graph>::SharedPtr graph_srv_client;
+    rclcpp::Client<NAS::NavAssistantPOI>::SharedPtr nav_assist_functions_client_POI;
+    rclcpp::Client<NAS::NavAssistantSetCNP>::SharedPtr nav_assist_functions_client_CNP;
 
-	// Make:plan service client (to estimate paths)
-	rclcpp::Client<topology_graph::srv::Graph>::SharedPtr graph_srv_client;
-	rclcpp::Client<NAS::NavAssistantPOI>::SharedPtr nav_assist_functions_client_POI;
-	rclcpp::Client<NAS::NavAssistantSetCNP>::SharedPtr nav_assist_functions_client_CNP;
+    rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;
+    rclcpp::Service<NAS::MakePlan>::SharedPtr makePlanServer;
 
-	rclcpp_action::Client<GetPlan>::SharedPtr getPlanClient;
-	rclcpp::Service<NAS::MakePlan>::SharedPtr makePlanServer;
+    void makePlan_async(const std::shared_ptr<rmw_request_id_t> header, const NAS::MakePlan::Request::SharedPtr request);
 
-	void makePlan_async(const std::shared_ptr<rmw_request_id_t> header,
-		const NAS::MakePlan::Request::SharedPtr request);
+    bool makePlan_sync(NAS::MakePlan::Request& request, NAS::MakePlan::Response& response);
+    // cmd_vel Publisher
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_publisher;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher;
 
-	bool makePlan_sync(NAS::MakePlan::Request& request, NAS::MakePlan::Response& response);
-	// cmd_vel Publisher
-	rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher;
-	rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_publisher;
-	rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher;
+    // MoveBase Action Client
+    rclcpp_action::Client<NavToPose>::SharedPtr mb_action_client;
 
-	//MoveBase Action Client
-	rclcpp_action::Client<NavToPose>::SharedPtr mb_action_client;
+    // functions
+    void close_and_return();
+    void turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal);
+    void move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_goal);
+    bool move_base_cancel_and_wait(double wait_time_sec);
+    void get_graph_data_from_json(json json_msg);
+    void regenerate_arcs();
 
+    // Parameters
+    bool verbose; // true/false
+    bool init_from_param, load_passages_as_CP, force_CP_as_additional_ANP;
+    std::string topology_parameter, init_from_file, save_to_file;
+    std::string topology_str;
+    int counter;
 
-	// functions
-	void close_and_return();
-	void turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal);
-	void move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_goal);
-	bool move_base_cancel_and_wait(double wait_time_sec);
-	void get_graph_data_from_json(json json_msg);
-	void regenerate_arcs();
-
-	//Parameters
-	bool verbose;                   //true/false
-	bool init_from_param, load_passages_as_CP, force_CP_as_additional_ANP;
-	std::string topology_parameter, init_from_file, save_to_file;
-	std::string topology_str;
-	int counter;
-
-
-
-	double getYaw(const geometry_msgs::msg::Pose& pose)
-	{
-		tf2::Quaternion quat;
-		tf2::fromMsg(pose.orientation, quat);
-		tf2::Matrix3x3 m(quat);
-		double roll, pitch, yaw;
-		m.getRPY(roll, pitch, yaw);
-		return yaw;
-	}
+    double getYaw(const geometry_msgs::msg::Pose& pose)
+    {
+        tf2::Quaternion quat;
+        tf2::fromMsg(pose.orientation, quat);
+        tf2::Matrix3x3 m(quat);
+        double roll, pitch, yaw;
+        m.getRPY(roll, pitch, yaw);
+        return yaw;
+    }
 };
