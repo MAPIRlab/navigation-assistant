@@ -1459,7 +1459,6 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
             }
         }
 
-        
         // sometimes the path starts at other, weird positions. Trim it so it starts where we want
         size_t planPoseIndex = 0;
         float distanceToStart =
@@ -1467,7 +1466,7 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
         if (distanceToStart > 0.1)
         {
             RCLCPP_WARN(get_logger(), "Received path does not start at origin pose!");
-            while(distanceToStart > 0.1 && planPoseIndex<plan.poses.size())
+            while (distanceToStart > 0.1 && planPoseIndex < plan.poses.size())
             {
                 distanceToStart = sqrt(pow(pose_origin.position.x - plan.poses[planPoseIndex].pose.position.x, 2) +
                                        pow(pose_origin.position.y - plan.poses[planPoseIndex].pose.position.y, 2));
@@ -1484,7 +1483,7 @@ double CGraphWrapper::get_nav_distance_two_poses(geometry_msgs::msg::Pose pose_o
         {
             Ax = p_ini.position.x - plan.poses[planPoseIndex].pose.position.x;
             Ay = p_ini.position.y - plan.poses[planPoseIndex].pose.position.y;
-            
+
             float distance = sqrt(pow(Ax, 2) + pow(Ay, 2));
             d += distance;
             total_nav_dist += distance;

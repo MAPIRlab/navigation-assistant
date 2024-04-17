@@ -78,8 +78,7 @@ public:
     public:
         rclcpp::Logger logger;
         NavigationGoal(rclcpp::Logger log) : logger(log)
-        {
-        }
+        {}
 
         std::shared_ptr<GoalHandleNavigate_Server> ServerGoalHandle;
         std::shared_ptr<NavToPoseClientGoalHandle> ClientGoalHandle;

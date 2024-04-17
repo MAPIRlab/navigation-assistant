@@ -13,13 +13,11 @@ namespace rviz_nav_assistant
         // superclass to declare which key will activate the tool.
         shortcut_key_ = 'n';
 
-        topic_property_ = new rviz_common::properties::StringProperty("Topic", "nav_assistant",
-            "The topic on which to publish navigation assitant goals.",
-            getPropertyContainer(), SLOT(updateTopic()), this);
+        topic_property_ = new rviz_common::properties::StringProperty(
+            "Topic", "nav_assistant", "The topic on which to publish navigation assitant goals.", getPropertyContainer(), SLOT(updateTopic()), this);
 
-        turn_before_nav_property_ = new rviz_common::properties::Property("Turn before nav", true,
-            "Turn towards path before moving",
-            getPropertyContainer(), SLOT(updateTurnBeforeNav()), this);
+        turn_before_nav_property_ = new rviz_common::properties::Property("Turn before nav", true, "Turn towards path before moving",
+                                                                          getPropertyContainer(), SLOT(updateTurnBeforeNav()), this);
     }
 
     void SetNavGoalTool::onInitialize()
@@ -57,9 +55,10 @@ namespace rviz_nav_assistant
         goal.pose.position.z = 0;
         goal.pose.orientation = tf2::toMsg(quat);
 
-        RCLCPP_INFO(get_logger(), "[NavAssistantTool]Setting goal: Frame:%s, Position(%.3f, %.3f, %.3f), Orientation(%.3f, %.3f, %.3f, %.3f) = Angle: %.3f\n", fixed_frame.c_str(),
-            goal.pose.position.x, goal.pose.position.y, goal.pose.position.z,
-            goal.pose.orientation.x, goal.pose.orientation.y, goal.pose.orientation.z, goal.pose.orientation.w, theta);
+        RCLCPP_INFO(get_logger(),
+                    "[NavAssistantTool]Setting goal: Frame:%s, Position(%.3f, %.3f, %.3f), Orientation(%.3f, %.3f, %.3f, %.3f) = Angle: %.3f\n",
+                    fixed_frame.c_str(), goal.pose.position.x, goal.pose.position.y, goal.pose.position.z, goal.pose.orientation.x,
+                    goal.pose.orientation.y, goal.pose.orientation.z, goal.pose.orientation.w, theta);
 
         nav_assistant_msgs::action::NavAssistant::Goal nav_goal;
         nav_goal.pose = goal;
@@ -67,7 +66,7 @@ namespace rviz_nav_assistant
         client->async_send_goal(nav_goal);
     }
 
-} // end namespace rviz
+} // namespace rviz_nav_assistant
 
 #include <pluginlib/class_list_macros.hpp>
 PLUGINLIB_EXPORT_CLASS(rviz_nav_assistant::SetNavGoalTool, rviz_common::Tool)

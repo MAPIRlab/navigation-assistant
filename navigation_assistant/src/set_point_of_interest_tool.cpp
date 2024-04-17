@@ -26,16 +26,13 @@ namespace rviz_nav_assistant
     }
 
     void SetPointOfInterestTool::onInitialize()
-    {
-    }
+    {}
 
     void SetPointOfInterestTool::activate()
-    {
-    }
+    {}
 
     void SetPointOfInterestTool::deactivate()
-    {
-    }
+    {}
 
     // Handling key events
     // ^^^^^^^^^^^^^^^^^^^^^
@@ -85,7 +82,8 @@ namespace rviz_nav_assistant
                 request->pose.pose.position.y = intersection.y;
                 request->pose.pose.position.z = 0.0;
                 request->pose.pose.orientation.w = 1.0;
-                RCLCPP_INFO(get_logger(), "[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", request->type.c_str(), intersection.x, intersection.y);
+                RCLCPP_INFO(get_logger(), "[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", request->type.c_str(), intersection.x,
+                            intersection.y);
 
                 nav_assist_srv_client->async_send_request(request);
             }
@@ -107,17 +105,17 @@ namespace rviz_nav_assistant
                 request->pose.pose.position.y = intersection.y;
                 request->pose.pose.position.z = 0.0;
                 request->pose.pose.orientation.w = 1.0;
-                RCLCPP_INFO(get_logger(), "[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", request->type.c_str(), intersection.x, intersection.y);
+                RCLCPP_INFO(get_logger(), "[POI]: Requesting the creation of new [%s] at (%.3f, %.3f)  ", request->type.c_str(), intersection.x,
+                            intersection.y);
                 nav_assist_srv_client->async_send_request(request);
             }
         }
         else if (event.middleDown())
-        {
-        }
+        {}
         return 1;
     }
 
-} // end namespace
+} // namespace rviz_nav_assistant
 
 #include <pluginlib/class_list_macros.hpp>
 PLUGINLIB_EXPORT_CLASS(rviz_nav_assistant::SetPointOfInterestTool, rviz_common::Tool)

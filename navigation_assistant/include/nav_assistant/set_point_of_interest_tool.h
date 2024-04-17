@@ -2,16 +2,14 @@
 #ifndef SET_POI_H
 #define SET_POI_H
 
-
-#ifndef Q_MOC_RUN  // See: https://bugreports.qt-project.org/browse/QTBUG-22829
-# include <QObject>
-# include <rclcpp/rclcpp.hpp>
-# include <rviz_common/tool.hpp>
+#ifndef Q_MOC_RUN // See: https://bugreports.qt-project.org/browse/QTBUG-22829
+#include <QObject>
+#include <rclcpp/rclcpp.hpp>
+#include <rviz_common/tool.hpp>
 #include "rviz_default_plugins/tools/pose/pose_tool.hpp"
 #endif
 #include <nav_assistant_msgs/srv/nav_assistant_poi.hpp>
 #include <nav_assistant_msgs/srv/nav_assistant_point.hpp>
-
 
 namespace rviz_nav_assistant
 {
@@ -21,7 +19,8 @@ namespace rviz_nav_assistant
         Q_OBJECT
     public:
         SetPointOfInterestTool();
-        virtual ~SetPointOfInterestTool() {}
+        virtual ~SetPointOfInterestTool()
+        {}
 
         virtual void onInitialize();
 
@@ -37,7 +36,6 @@ namespace rviz_nav_assistant
         bool shift_down;
     };
 
-}
+} // namespace rviz_nav_assistant
 
 #endif
-
