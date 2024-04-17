@@ -659,7 +659,7 @@ std::optional<std::string> CNavAssistant::get_closest_ING(const geometry_msgs::m
     graphRequest->params.push_back("ING");
 
     auto future = graph_srv_client->async_send_request(graphRequest);
-    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(20));
+    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(5));
 
     if (result != rclcpp::FutureReturnCode::SUCCESS)
     {
