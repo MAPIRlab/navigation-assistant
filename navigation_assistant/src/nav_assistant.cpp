@@ -2,36 +2,37 @@
 using json = nlohmann::json;
 using namespace std::placeholders;
 
-//-----------------------------------------------------------
-//                    Subscriptions
-//----------------------------------------------------------
-
-// Robot location update
-void CNavAssistant::localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+//===================================================================================
+//================================== MAIN ===========================================
+//===================================================================================
+int main(int argc, char** argv)
 {
-    // keep the most recent robot pose = position + orientation
-    geometry_msgs::msg::PoseStamped msgPose;
-    msgPose.header = msg->header;
-    msgPose.pose = msg->pose.pose;
-    current_robot_pose = transformPoseToFrame(msgPose, "map");
-}
+    rclcpp::init(argc, argv);
 
-geometry_msgs::msg::PoseStamped CNavAssistant::transformPoseToFrame(const geometry_msgs::msg::PoseStamped& pose, const std::string& target_frame)
-{
-    static tf2_ros::Buffer buffer(get_clock());
-    static tf2_ros::TransformListener listener(buffer);
-    using namespace std::chrono_literals;
-    geometry_msgs::msg::PoseStamped result;
-    try
+    std::shared_ptr<CNavAssistant> nav_assistant = std::make_shared<CNavAssistant>("nav_assistant");
+    nav_assistant->Init();
+    RCLCPP_INFO(nav_assistant->get_logger(), "[NavAssistant] Action server is ready for action!...");
+
+    rclcpp::Rate rate(20);
+    while (rclcpp::ok())
     {
-        result = buffer.transform(pose, target_frame, std::chrono::duration_cast<std::chrono::nanoseconds>(0.5s));
+        rclcpp::spin_some(nav_assistant);
+        nav_assistant->HandleGraphRequests();
+
+        if (nav_assistant->m_currentGoal.ServerGoalHandle)
+        {
+            nav_assistant->UpdateRobotPose();
+            auto currentServerGoalHandle = nav_assistant->m_currentGoal.ServerGoalHandle;
+            nav_assistant->execute();
+
+            // dont reset the variable if a new goal was received before the last one was completed
+            if (currentServerGoalHandle == nav_assistant->m_currentGoal.ServerGoalHandle)
+                nav_assistant->m_currentGoal.ServerGoalHandle = {nullptr};
+        }
+        rate.sleep();
     }
-    catch (const std::exception& e)
-    {
-        result = pose;
-        RCLCPP_ERROR(get_logger(), "Error transforming pose: %s", e.what());
-    }
-    return result;
+
+    return 0;
 }
 
 //-----------------------------------------------------------
@@ -55,7 +56,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
     force_CP_as_additional_ANP = declare_parameter<bool>("force_CP_as_additional_ANP", false);
     init_from_file = declare_parameter<std::string>("init_from_file", "");
     save_to_file = declare_parameter<std::string>("save_to_file", "");
-    std::string localization_topic = declare_parameter<std::string>("localization_topic", "amcl_pose");
+    robot_frame = declare_parameter<std::string>("robot_frame", "base_link");
 
     makePlanServer = create_service<NAS::MakePlan>("navigation_assistant/make_plan", std::bind(&CNavAssistant::makePlan_async, this, _1, _2));
 
@@ -66,9 +67,6 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
     nav_assist_functions_client_POI = create_client<NAS::NavAssistantPOI>("navigation_assistant/get_poi_related_poses");
     nav_assist_functions_client_CNP = create_client<NAS::NavAssistantSetCNP>("navigation_assistant/get_cnp_pose_around");
 
-    // Subscribers
-    localization_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(localization_topic, 1,
-                                                                                           std::bind(&CNavAssistant::localizationCallback, this, _1));
     // Publishers
     cmd_vel_publisher = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 1);
     ready_publisher = create_publisher<std_msgs::msg::Bool>("nav_assistant/ready", 1);
@@ -84,7 +82,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
         std::string as_name = (_namespace + "/" + name);
         RCLCPP_INFO(get_logger(), "Advertising navigation ActionServer: %s", as_name.c_str());
         RCLCPP_INFO(get_logger(), "Advertising \"make plan\" Service: %s", makePlanServer->get_service_name());
-        RCLCPP_INFO(get_logger(), "Listening to localization topic: %s", localization_sub_->get_topic_name());
+        RCLCPP_INFO(get_logger(), "Using TF frame \"%s\" for the robot position", robot_frame.c_str());
     }
 
     {
@@ -119,7 +117,7 @@ void CNavAssistant::Init()
         request->params.push_back(init_from_file);
 
         auto future = graph_srv_client->async_send_request(request);
-        if (rclcpp::spin_until_future_complete(shared_from_this(), future) != rclcpp::FutureReturnCode::SUCCESS)
+        if (rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(2)) != rclcpp::FutureReturnCode::SUCCESS)
             RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to Load Graph from file. Skipping.");
     }
 
@@ -173,8 +171,7 @@ void CNavAssistant::makePlan_async(const std::shared_ptr<rmw_request_id_t> heade
     mb_request.start = request->start;
     mb_request.goal = request->goal;
 
-    auto callback = [header, sendTime, this](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result)
-    {
+    auto callback = [header, sendTime, this](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result) {
         nav_msgs::msg::Path& m_CurrentPlan = w_result.result->path;
         RCLCPP_INFO(get_logger(), "Path calculated");
         RCLCPP_INFO(get_logger(), "GOT REPLY IN %fs", (now() - sendTime).seconds());
@@ -210,8 +207,7 @@ bool CNavAssistant::makePlan_sync(NAS::MakePlan::Request& request, NAS::MakePlan
     // send the "make plan" goal to nav2 and wait until the response comes back
     std::optional<nav_msgs::msg::Path> m_CurrentPlan = std::nullopt;
 
-    auto callback = [&m_CurrentPlan, this](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result)
-    {
+    auto callback = [&m_CurrentPlan, this](const rclcpp_action::ClientGoalHandle<GetPlan>::WrappedResult& w_result) {
         m_CurrentPlan = w_result.result->path;
         RCLCPP_INFO(get_logger(), "Path calculated");
     };
@@ -219,7 +215,7 @@ bool CNavAssistant::makePlan_sync(NAS::MakePlan::Request& request, NAS::MakePlan
     goal_options.result_callback = callback;
 
     auto future = getPlanClient->async_send_goal(mb_request, goal_options);
-    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(1));
 
     // Check if valid goal with move_base srv
     if (result != rclcpp::FutureReturnCode::SUCCESS)
@@ -349,7 +345,7 @@ bool CNavAssistant::move_base_cancel_and_wait(double wait_time_sec)
         // Request goal cancelation (asincronous)
         auto future = mb_action_client->async_cancel_all_goals();
 
-        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
+        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(1));
 
         if (result == rclcpp::FutureReturnCode::SUCCESS)
             return true;
@@ -386,7 +382,7 @@ void CNavAssistant::move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_
     m_currentGoal.complete = false;
 
     auto future = mb_action_client->async_send_goal(mb_goal, goal_options);
-    rclcpp::spin_until_future_complete(shared_from_this(), future);
+    rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(1));
 
     rclcpp::Rate rate(200);
     while (rclcpp::ok() && !m_currentGoal.complete && !m_currentGoal.goalCancelled)
@@ -440,189 +436,124 @@ void CNavAssistant::execute()
         if (verbose)
             RCLCPP_INFO(get_logger(), "Starting Navigation Assistant to reach: [%.2f, %.2f]", goal->pose.pose.position.x, goal->pose.pose.position.y);
 
-        // Get path (robot->goal) from topology-graph node
-        std::string node_start, node_end;
-        std::vector<std::string> path;
+        std::optional<std::string> node_start = get_closest_ING(current_robot_pose.pose.position);
 
-        // 1. Get starting ING node
-        auto graphRequest = std::make_shared<topology_graph::srv::Graph::Request>();
-        graphRequest->cmd = "GetClosestNode"; // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
-        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.position.x));
-        graphRequest->params.push_back(std::to_string(current_robot_pose.pose.position.y));
-        graphRequest->params.push_back(std::to_string(0.0));
-        graphRequest->params.push_back("ING");
-
-        auto future = graph_srv_client->async_send_request(graphRequest);
-        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-        auto response = future.get();
-
-        if (response->success)
+        if (!node_start)
         {
-            node_start = response->result[0]; // result: [id label type x y yaw]
-            if (verbose)
-                RCLCPP_INFO(get_logger(), "[NavAssistant]: Starting Node is %s - %s", node_start.c_str(), response->result[1].c_str());
-
-            // 2. Get ending ING node
-            graphRequest->cmd = "GetClosestNode"; // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
-            graphRequest->params.clear();
-            response->result.clear();
-            graphRequest->params.push_back(std::to_string(goal->pose.pose.position.x));
-            graphRequest->params.push_back(std::to_string(goal->pose.pose.position.y));
-            graphRequest->params.push_back(std::to_string(0.0));
-            graphRequest->params.push_back("ING");
-            future = graph_srv_client->async_send_request(graphRequest);
-            result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-            response = future.get();
-            if (response->success)
-            {
-                node_end = response->result[0]; // result: [id label type x y yaw]
-                if (verbose)
-                    RCLCPP_INFO(get_logger(), "[NavAssistant]: End Node is %s -%s", node_end.c_str(), response->result[1].c_str());
-
-                // Navigation to Intermediate Navigation Goals (ING) if any
-                if (node_start != node_end)
-                {
-                    // Find Path
-                    // params: [nodeID_start, nodeID_end]
-                    // result: Success/Failure. On success the list of Nodes ["id1 label1 type1 x1 y1 yaw", ..., ""idN labelN typeN xN yN yawN"]
-                    graphRequest->cmd = "FindPath";
-                    graphRequest->params.clear();
-                    response->result.clear();
-                    graphRequest->params.push_back(node_start);
-                    graphRequest->params.push_back(node_end);
-                    future = graph_srv_client->async_send_request(graphRequest);
-                    result = rclcpp::spin_until_future_complete(shared_from_this(), future);
-                    response = future.get();
-                    if (response->success)
-                    {
-                        path = response->result;
-                        if (verbose)
-                        {
-                            for (auto n : path)
-                                RCLCPP_INFO(get_logger(), "[NavAssistant]: %s", n.c_str());
-                        }
-
-                        try
-                        {
-                            //===============================================================
-                            // The path is composed of ING nodes.
-                            // ING nodes corresponding to a CNP/CP have the same label
-                            // We only consider here those ING that cross a Critial Point
-                            // Therefore, remove any orphan ING (single label)
-                            // Orphan nodes are prone to happen at the start and end points
-                            //===============================================================
-                            // START node
-                            std::vector<string> node0, node1;
-                            boost::split(node0, path[0], boost::is_any_of(" "));
-                            boost::split(node1, path[1], boost::is_any_of(" "));
-                            if (node0[1] != node1[1]) // Orphan node. Remove it
-                                path.erase(path.begin());
-                            // END node
-                            boost::split(node0, path[path.size() - 1], boost::is_any_of(" "));
-                            boost::split(node1, path[path.size() - 2], boost::is_any_of(" "));
-                            if (node0[1] != node1[1]) // Orphan node. Remove it
-                                path.erase(path.end());
-
-                            // Step by Step NAVIGATION
-                            for (size_t i = 0; i < path.size(); i++)
-                            {
-                                // Node data = "id label type x y yaw"
-                                std::vector<string> current_node_data, next_node_data;
-                                boost::split(current_node_data, path[i], boost::is_any_of(" "));
-
-                                // Set i_goal
-                                geometry_msgs::msg::PoseStamped i_goal;
-                                i_goal.header.frame_id = "map";
-                                i_goal.header.stamp = rclcpp::Time(0);
-                                i_goal.pose.position.x = atof(current_node_data[3].c_str());
-                                i_goal.pose.position.y = atof(current_node_data[4].c_str());
-                                i_goal.pose.position.z = 0.0;
-                                // Set correct orientation (towards next node)
-                                double target_yaw_map;
-                                if (i < (path.size() - 1))
-                                {
-                                    // Head towards next node
-                                    boost::split(next_node_data, path[i + 1], boost::is_any_of(" "));
-                                    double Ax = atof(next_node_data[3].c_str()) - atof(current_node_data[3].c_str());
-                                    double Ay = atof(next_node_data[4].c_str()) - atof(current_node_data[4].c_str());
-                                    target_yaw_map = atan2(Ay, Ax);
-                                }
-                                else
-                                {
-                                    // Head towards goal!
-                                    double Ax = goal->pose.pose.position.x - atof(current_node_data[3].c_str());
-                                    double Ay = goal->pose.pose.position.y - atof(current_node_data[4].c_str());
-                                    target_yaw_map = atan2(Ay, Ax);
-                                }
-                                // Set orientation
-                                tf2::Quaternion q;
-                                q.setRPY(0, 0, angles::normalize_angle(target_yaw_map));
-                                i_goal.pose.orientation = tf2::toMsg(q);
-
-                                // A. Initial Turn
-                                if (m_currentGoal.checkIfCancelled(shared_from_this()))
-                                    return;
-                                if (goal->turn_before_nav)
-                                    turn_towards_path(i_goal);
-
-                                // B. Navigate to i_goal using MOVE_BASE!
-                                if (m_currentGoal.checkIfCancelled(shared_from_this()))
-                                    return;
-                                move_base_nav_and_wait(i_goal);
-                            }
-                        }
-                        catch (exception e)
-                        {
-                            RCLCPP_ERROR(get_logger(), "[NavAssistant] Exception while navigating through path: %s\n", e.what());
-                            close_and_return();
-                            return;
-                        }
-                        catch (...)
-                        {
-                            RCLCPP_ERROR(get_logger(), "[NavAssistant] Unknown Exception while navigating through path");
-                            close_and_return();
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        if (verbose)
-                            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Path. Trying direct navigation.");
-                    }
-                } // end if-start!=end
-            }
-            else if (verbose)
-                RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Closest ING Node (end) pose=[%.3f, %.3f]. Trying direct navigation.",
-                            goal->pose.pose.position.x, goal->pose.pose.position.y);
-        }
-        else if (verbose)
-            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Closest ING Node (start) pose=[%.3f, %.3f]. Trying direct navigation.",
+            RCLCPP_WARN(get_logger(), "Unable to get Closest ING Node pose=[%.3f, %.3f]. Trying direct navigation.",
                         current_robot_pose.pose.position.x, current_robot_pose.pose.position.y);
-
-        // -------------------------------
-        // NAVIGATION TO TARGET GOAL (MB)
-        // -------------------------------
-
-        if (m_currentGoal.checkIfCancelled(shared_from_this()))
+            navigate_to(goal->pose, goal->turn_before_nav, true);
             return;
-
-        // 1. Initial Turn
-        if (goal->turn_before_nav)
-            turn_towards_path(goal->pose);
-
-        rclcpp::spin_some(shared_from_this());
-
-        if (m_currentGoal.checkIfCancelled(shared_from_this()))
-            return;
-        // 2. Navigate to goal
-        move_base_nav_and_wait(goal->pose);
-
-        // reset the cancelled flag if the cancellation happened after the second goal was sent
-        if (!m_currentGoal.checkIfCancelled(shared_from_this()))
-        {
-            auto result = std::make_shared<NAS_ac::NavAssistant::Result>();
-            m_currentGoal.ServerGoalHandle->succeed(result);
         }
+
+        std::optional<std::string> node_end = get_closest_ING(goal->pose.pose.position);
+        if (!node_end)
+        {
+            RCLCPP_WARN(get_logger(), "Unable to get Closest ING Node pose=[%.3f, %.3f]. Trying direct navigation.", goal->pose.pose.position.x,
+                        goal->pose.pose.position.y);
+            navigate_to(goal->pose, goal->turn_before_nav, true);
+            return;
+        }
+
+        if (node_start.value() == node_end.value())
+        {
+            RCLCPP_INFO(get_logger(), "Start and end ING nodes coincide. No CNPs in the way, so using direct navigation.");
+            navigate_to(goal->pose, goal->turn_before_nav, true);
+            return;
+        }
+
+        if (verbose)
+        {
+            RCLCPP_INFO(get_logger(), "[NavAssistant]: Starting Node is %s", node_start.value().c_str());
+            RCLCPP_INFO(get_logger(), "[NavAssistant]: End Node is %s", node_end.value().c_str());
+        }
+
+        // Find Path
+        // params: [nodeID_start, nodeID_end]
+        // result: Success/Failure. On success the list of Nodes ["id1 label1 type1 x1 y1 yaw", ..., ""idN labelN typeN xN yN yawN"]
+        auto graphRequest = std::make_shared<topology_graph::srv::Graph::Request>();
+        graphRequest->cmd = "FindPath";
+        graphRequest->params.clear();
+        graphRequest->params.push_back(node_start.value());
+        graphRequest->params.push_back(node_end.value());
+        auto future = graph_srv_client->async_send_request(graphRequest);
+        auto result = rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(1));
+        auto response = future.get();
+        if (!response->success)
+        {
+            RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to get Path. Trying direct navigation.");
+            navigate_to(goal->pose, goal->turn_before_nav, true);
+            return;
+        }
+
+        // Get path (robot->goal) from topology-graph node
+        std::vector<std::string> path;
+        path = response->result;
+        if (verbose)
+        {
+            for (auto n : path)
+                RCLCPP_INFO(get_logger(), "[NavAssistant]: %s", n.c_str());
+        }
+        //===============================================================
+        // The path is composed of ING nodes.
+        // ING nodes corresponding to a CNP/CP have the same label
+        // We only consider here those ING that cross a Critial Point
+        // Therefore, remove any orphan ING (single label)
+        // Orphan nodes are prone to happen at the start and end points
+        //===============================================================
+        // START node
+        std::vector<string> node0, node1;
+        boost::split(node0, path[0], boost::is_any_of(" "));
+        boost::split(node1, path[1], boost::is_any_of(" "));
+        if (node0[1] != node1[1]) // Orphan node. Remove it
+            path.erase(path.begin());
+        // END node
+        boost::split(node0, path[path.size() - 1], boost::is_any_of(" "));
+        boost::split(node1, path[path.size() - 2], boost::is_any_of(" "));
+        if (node0[1] != node1[1]) // Orphan node. Remove it
+            path.erase(path.end());
+
+        // Step by Step NAVIGATION
+        for (size_t i = 0; i < path.size(); i++)
+        {
+            // Node data = "id label type x y yaw"
+            std::vector<string> current_node_data, next_node_data;
+            boost::split(current_node_data, path[i], boost::is_any_of(" "));
+
+            // Set i_goal
+            geometry_msgs::msg::PoseStamped i_goal;
+            i_goal.header.frame_id = "map";
+            i_goal.header.stamp = rclcpp::Time(0);
+            i_goal.pose.position.x = atof(current_node_data[3].c_str());
+            i_goal.pose.position.y = atof(current_node_data[4].c_str());
+            i_goal.pose.position.z = 0.0;
+            // Set correct orientation (towards next node)
+            double target_yaw_map;
+            if (i < (path.size() - 1))
+            {
+                // Head towards next node
+                boost::split(next_node_data, path[i + 1], boost::is_any_of(" "));
+                double Ax = atof(next_node_data[3].c_str()) - atof(current_node_data[3].c_str());
+                double Ay = atof(next_node_data[4].c_str()) - atof(current_node_data[4].c_str());
+                target_yaw_map = atan2(Ay, Ax);
+            }
+            else
+            {
+                // Head towards goal!
+                double Ax = goal->pose.pose.position.x - atof(current_node_data[3].c_str());
+                double Ay = goal->pose.pose.position.y - atof(current_node_data[4].c_str());
+                target_yaw_map = atan2(Ay, Ax);
+            }
+            // Set orientation
+            tf2::Quaternion q;
+            q.setRPY(0, 0, angles::normalize_angle(target_yaw_map));
+            i_goal.pose.orientation = tf2::toMsg(q);
+
+            navigate_to(i_goal, goal->turn_before_nav, false);
+        }
+
+        // We are done with intermediate goals, actually get to the requested final pose
+        navigate_to(goal->pose, goal->turn_before_nav, true);
     }
 
     catch (exception e)
@@ -631,11 +562,35 @@ void CNavAssistant::execute()
         close_and_return();
         return;
     }
-    catch (...)
-    {
-        RCLCPP_ERROR(get_logger(), "[NavAssistant] Unknown Exception in AS");
-        close_and_return();
+}
+
+void CNavAssistant::navigate_to(const geometry_msgs::msg::PoseStamped& target, bool turn_before_nav, bool is_last)
+{
+    // -------------------------------
+    // NAVIGATION TO TARGET GOAL (MB)
+    // -------------------------------
+
+    UpdateRobotPose();
+
+    if (m_currentGoal.checkIfCancelled(shared_from_this()))
         return;
+
+    // 1. Initial Turn
+    if (turn_before_nav)
+        turn_towards_path(target);
+
+    rclcpp::spin_some(shared_from_this());
+
+    if (m_currentGoal.checkIfCancelled(shared_from_this()))
+        return;
+    // 2. Navigate to goal
+    move_base_nav_and_wait(target);
+
+    // reset the cancelled flag if the cancellation happened after the second goal was sent
+    if (is_last && !m_currentGoal.checkIfCancelled(shared_from_this()))
+    {
+        auto result = std::make_shared<NAS_ac::NavAssistant::Result>();
+        m_currentGoal.ServerGoalHandle->succeed(result);
     }
 }
 
@@ -658,37 +613,34 @@ void CNavAssistant::close_and_return()
 }
 
 CNavAssistant::~CNavAssistant()
+{}
+
+void CNavAssistant::UpdateRobotPose()
 {
-}
+    static tf2_ros::Buffer buffer(get_clock());
+    static tf2_ros::TransformListener listener(buffer);
+    static bool first_time = true;
 
-//===================================================================================
-//================================== MAIN ===========================================
-//===================================================================================
-int main(int argc, char** argv)
-{
-    rclcpp::init(argc, argv);
-
-    std::shared_ptr<CNavAssistant> nav_assistant = std::make_shared<CNavAssistant>("nav_assistant");
-    nav_assistant->Init();
-    RCLCPP_INFO(nav_assistant->get_logger(), "[NavAssistant] Action server is ready for action!...");
-
-    rclcpp::Rate rate(20);
-    while (rclcpp::ok())
+    // let the tf listener get the frames before using it
+    if (first_time)
     {
-        rclcpp::spin_some(nav_assistant);
-        nav_assistant->HandleGraphRequests();
-
-        if (nav_assistant->m_currentGoal.ServerGoalHandle.get() != nullptr)
-        {
-            auto currentServerGoalHandle = nav_assistant->m_currentGoal.ServerGoalHandle;
-            nav_assistant->execute();
-
-            // dont reset the variable if a new goal was received before the last one was completed
-            if (currentServerGoalHandle == nav_assistant->m_currentGoal.ServerGoalHandle)
-                nav_assistant->m_currentGoal.ServerGoalHandle = {nullptr};
-        }
-        rate.sleep();
+        rclcpp::sleep_for(std::chrono::seconds(1));
+        rclcpp::spin_some(shared_from_this());
+        first_time = false;
     }
 
-    return 0;
+    try
+    {
+
+        geometry_msgs::msg::TransformStamped robot_tf = buffer.lookupTransform("map", robot_frame, tf2::TimePointZero);
+        current_robot_pose.header = robot_tf.header;
+        current_robot_pose.pose.position.x = robot_tf.transform.translation.x;
+        current_robot_pose.pose.position.y = robot_tf.transform.translation.y;
+        current_robot_pose.pose.position.z = robot_tf.transform.translation.z;
+        current_robot_pose.pose.orientation = robot_tf.transform.rotation;
+    }
+    catch (const std::exception& e)
+    {
+        RCLCPP_ERROR(get_logger(), "Error transforming pose: %s", e.what());
+    }
 }

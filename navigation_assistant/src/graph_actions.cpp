@@ -277,7 +277,7 @@ bool CNavAssistant::addNode(std::string node_label, std::string node_type, doubl
 				graphRequest->cmd = "AddNode"; // params: [node_label, node_type, pos_x, pos_y, [pose_yaw]]
 				graphRequest->params.clear();
 				graphRequest->params.push_back(node_label); // use the same label as the original POI
-				graphRequest->params.push_back("SP");
+				graphRequest->params.push_back("ING");
 				graphRequest->params.push_back(std::to_string(p.pose.position.x));
 				graphRequest->params.push_back(std::to_string(p.pose.position.y));
 
@@ -605,7 +605,7 @@ void CNavAssistant::HandleGraphRequests()
 			std::string label = req->type + "_" + std::to_string(counter);
 			counter++;
 			if (verbose)
-				RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Add a Node,");
+				RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Add a Node");
 
 			// Execute action and return result
 			if (addNode(label, req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle))
@@ -617,7 +617,7 @@ void CNavAssistant::HandleGraphRequests()
 		else if (req->action == "delete")
 		{
 			if (verbose)
-				RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Delete a Node,");
+				RCLCPP_INFO(get_logger(), "[NavAssistant] Request to Delete a Node");
 			if (deleteNode(req->type, req->pose.pose.position.x, req->pose.pose.position.y, yaw_angle))
 			{
 				if (req->type == "CP" || req->type == "CNP" || req->type == "passage")
@@ -646,4 +646,33 @@ void CNavAssistant::HandleGraphRequests()
 			}
 		}
 	}
+}
+
+
+std::optional<std::string> CNavAssistant::get_closest_ING(const geometry_msgs::msg::Point& point)
+{
+    auto graphRequest = std::make_shared<topology_graph::srv::Graph::Request>();
+    graphRequest->cmd = "GetClosestNode"; // params: [pose_x, pose_y, pose_yaw, [node_type], [node_label]]
+    graphRequest->params.push_back(std::to_string(point.x));
+    graphRequest->params.push_back(std::to_string(point.y));
+    graphRequest->params.push_back(std::to_string(0.0));
+    graphRequest->params.push_back("ING");
+
+    auto future = graph_srv_client->async_send_request(graphRequest);
+    auto result = rclcpp::spin_until_future_complete(shared_from_this(), future, std::chrono::seconds(20));
+    
+    if(result != rclcpp::FutureReturnCode::SUCCESS)
+    {
+        RCLCPP_WARN(get_logger(), "Could not get a response from topology_graph service (%s).", graph_srv_client->get_service_name());
+        return std::nullopt;
+    }
+    else
+    {
+        std::shared_ptr<topology_graph::srv::Graph::Response> response = future.get();
+        if(response->success)
+            return response->result[0];
+        else
+            return std::nullopt;
+    }
+
 }

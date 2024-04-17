@@ -29,11 +29,14 @@ namespace rviz_nav_assistant
 
     private Q_SLOTS:
         void updateTopic();
+        void updateTurnBeforeNav();
 
     private:
         rclcpp_action::Client<nav_assistant_msgs::action::NavAssistant>::SharedPtr client;
-
+        bool turn_before_nav;
+        
         rviz_common::properties::StringProperty* topic_property_;      //where to publish the navigation goals.
+        rviz_common::properties::Property* turn_before_nav_property_;      
     };
 
 }

@@ -4,8 +4,9 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
 
 
 
-set(CMAKE_BUILD_TYPE "None") 
-set(CMAKE_CXX_FLAGS "-std=c++17 -g -O2 ${CMAKE_CXX_FLAGS}")
+set(CMAKE_BUILD_TYPE "Release") 
+set(CMAKE_CXX_FLAGS_RELEASE "-std=c++17 -O3 ${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS_DEBUG "-std=c++17 -g -O0 ${CMAKE_CXX_FLAGS}")
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -13,7 +14,6 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
-find_package(spdlog REQUIRED)
 find_package(Boost REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
@@ -49,7 +49,7 @@ target_link_libraries(topology_graph_node "${cpp_typesupport_target}")
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(topology_graph_node
-    -lboost_graph spdlog::spdlog
+    -lboost_graph
 )
 
 install(

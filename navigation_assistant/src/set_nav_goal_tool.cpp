@@ -16,6 +16,10 @@ namespace rviz_nav_assistant
         topic_property_ = new rviz_common::properties::StringProperty("Topic", "nav_assistant",
             "The topic on which to publish navigation assitant goals.",
             getPropertyContainer(), SLOT(updateTopic()), this);
+
+        turn_before_nav_property_ = new rviz_common::properties::Property("Turn before nav", true,
+            "Turn towards path before moving",
+            getPropertyContainer(), SLOT(updateTurnBeforeNav()), this);
     }
 
     void SetNavGoalTool::onInitialize()
@@ -29,6 +33,11 @@ namespace rviz_nav_assistant
     void SetNavGoalTool::updateTopic()
     {
         client = rclcpp_action::create_client<nav_assistant_msgs::action::NavAssistant>(this, topic_property_->getStdString());
+    }
+
+    void SetNavGoalTool::updateTurnBeforeNav()
+    {
+        turn_before_nav = turn_before_nav_property_->getValue().toBool();
     }
 
     // Set what to do on pose set!
@@ -54,7 +63,7 @@ namespace rviz_nav_assistant
 
         nav_assistant_msgs::action::NavAssistant::Goal nav_goal;
         nav_goal.pose = goal;
-        nav_goal.turn_before_nav = true;
+        nav_goal.turn_before_nav = turn_before_nav;
         client->async_send_goal(nav_goal);
     }
 

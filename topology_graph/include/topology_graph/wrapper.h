@@ -30,6 +30,7 @@ public:
     double marker_lifespam;
 
 protected:
+    rclcpp::Node::SharedPtr makePlanNode;
     bool verbose;
 
     // The graph!

@@ -1,0 +1,1 @@
+A little test scene and example launch file for nav_assistant. Uses [BasicSim](https://github.com/PepeOjeda/BasicSim) for the actual robot simulation.

@@ -127,6 +127,7 @@ public:
     NavigationGoal m_currentGoal;
 
     void HandleGraphRequests();
+    void UpdateRobotPose();
 
 private:
     std::deque<NAS::NavAssistantPoint::Request::SharedPtr> pointRequestQueue;
@@ -143,8 +144,7 @@ private:
     }
 
     // subscriber to Robot localization
-    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr localization_sub_;
-    void localizationCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
+    std::string robot_frame;
     geometry_msgs::msg::PoseStamped current_robot_pose;
 
     // Make:plan service client (to estimate paths)
@@ -167,12 +167,14 @@ private:
     rclcpp_action::Client<NavToPose>::SharedPtr mb_action_client;
 
     // functions
+    void navigate_to(const geometry_msgs::msg::PoseStamped& pose, bool turn_before_nav, bool is_last);
     void close_and_return();
     void turn_towards_path(geometry_msgs::msg::PoseStamped pose_goal);
     void move_base_nav_and_wait(geometry_msgs::msg::PoseStamped pose_goal);
     bool move_base_cancel_and_wait(double wait_time_sec);
     void get_graph_data_from_json(json json_msg);
     void regenerate_arcs();
+    std::optional<std::string> get_closest_ING(const geometry_msgs::msg::Point& point);
 
     // Parameters
     bool verbose; // true/false

@@ -34,10 +34,13 @@ class nav_assist_functions(Node):
 		self.declare_parameter('verbose', False)
 		self.verbose = self.get_parameter('verbose').get_parameter_value().bool_value
 
+		self.declare_parameter('robot_radius', 0.25)
+		self.robot_radius = self.get_parameter('robot_radius').get_parameter_value().double_value
+
 
 		# Subscribers to MAP
 		self.map_sub =  self.create_subscription(OccupancyGrid, "map", self.map_cb, 
-										    qos_profile=QoSProfile(
+											qos_profile=QoSProfile(
 												reliability=QoSReliabilityPolicy.RELIABLE,
 												history=QoSHistoryPolicy.KEEP_LAST,
 												durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -55,12 +58,12 @@ class nav_assist_functions(Node):
 
 		# Wait till map is available
 		while not self.hasMap:
-			self.get_logger().info( "Waiting to get the occupancy Map of the environment." )
+			self.get_logger().info( f"Waiting to get the occupancy Map of the environment on topic {self.map_sub.topic_name}" )
 			rclpy.spin_once(self, executor=None, timeout_sec=1)
 
 		# Wait till CostMap is available
 		while not self.has_global_costmap:
-			self._logger.info( "Waiting to get the Global CostMap." )
+			self._logger.info( f"Waiting to get the Global CostMap on topic {self.costmap_sub.topic_name}" )
 			rclpy.spin_once(self, executor=None, timeout_sec=1)
 
 
@@ -87,8 +90,8 @@ class nav_assist_functions(Node):
 		#except:
 		#    self._logger.error( f"[NavAssitant-map_cb] Unexpected error when reshaping the MAP:{sys.exc_info()[0]}" )
 
-		#print(type(self.currentMap.data))
-		#print(self.currentMap.data.shape)
+		#self._logger.info(type(self.currentMap.data))
+		#self._logger.info(self.currentMap.data.shape)
 		#np.savetxt("/home/jgmonroy/mapa_paco_numpy.txt", self.currentMap.data, fmt='%d')
 
 		#fig = plt.figure()
@@ -108,8 +111,9 @@ class nav_assist_functions(Node):
 		try:
 			self.currentCostMap.data = np.array(costmap_msg.data).reshape( (self.currentCostMap.info.height, self.currentCostMap.info.width) )
 			self.currentCostMap.data = np.flipud(self.currentCostMap.data)
-		except:
-			self._logger.error(f"[NavAssitant-gcostmap_cb] Unexpected error when reshaping the MAP:{sys.exc_info()[0]}")
+		
+		except Exception as error:
+			self._logger.error(f"[NavAssitant-gcostmap_cb] Unexpected error when reshaping the MAP:{error}")
 
 
 	# =============================================================
@@ -121,8 +125,8 @@ class nav_assist_functions(Node):
 		# Get Auxiliary points
 		try:
 			aux_points = self.get_auxiliary_nodes([req.pose.pose.position.x, req.pose.pose.position.y]);
-		except:
-			self._logger.error(f"[NavAssitant-get_auxiliary_nodes] Unexpected error:{sys.exc_info()[0]}")
+		except Exception as error:
+			self._logger.error(f"[NavAssitant-get_auxiliary_nodes] Unexpected error:{error}")
 			res.success = False
 			return res
 
@@ -134,7 +138,7 @@ class nav_assist_functions(Node):
 				# SP points
 				res.sp = []
 				mypose = PoseStamped()
-				mypose.header.stamp = rclpy.Time.now()
+				mypose.header.stamp = self._clock.now().to_msg()
 				mypose.header.frame_id = "map"
 				mypose.pose.position.x = aux_points[0][0][0]
 				mypose.pose.position.y = aux_points[0][0][1]
@@ -143,7 +147,7 @@ class nav_assist_functions(Node):
 				res.sp.append(mypose)
 
 				mypose2 = PoseStamped()
-				mypose2.header.stamp = rclpy.Time.now()
+				mypose2.header.stamp = self._clock.now().to_msg()
 				mypose2.header.frame_id = "map"
 				mypose2.pose.position.x = aux_points[0][1][0]
 				mypose2.pose.position.y = aux_points[0][1][1]
@@ -155,7 +159,7 @@ class nav_assist_functions(Node):
 				# ING points
 				res.ing = []
 				mypose3 = PoseStamped()
-				mypose3.header.stamp = rclpy.Time.now()
+				mypose3.header.stamp = self._clock.now().to_msg()
 				mypose3.header.frame_id = "map"
 				mypose3.pose.position.x = aux_points[0][2][0]
 				mypose3.pose.position.y = aux_points[0][2][1]
@@ -164,15 +168,15 @@ class nav_assist_functions(Node):
 				res.ing.append(mypose3)
 
 				mypose4 = PoseStamped()
-				mypose4.header.stamp = rclpy.Time.now()
+				mypose4.header.stamp = self._clock.now().to_msg()
 				mypose4.header.frame_id = "map"
 				mypose4.pose.position.x = aux_points[0][3][0]
 				mypose4.pose.position.y = aux_points[0][3][1]
 				mypose4.pose.position.z = 0.0
 				mypose4.pose.orientation =  Quaternion()
 				res.ing.append(mypose4)
-			except:
-				self._logger.error(f"[NavAssitant-handle_new_poi] Unexpected error:{sys.exc_info()[0]}")
+			except Exception as error:
+				self._logger.error(f"[NavAssitant-handle_new_poi] Unexpected error:{error}")
 				res.success = False
 				return res
 		else:
@@ -215,11 +219,11 @@ class nav_assist_functions(Node):
 
 				# Get Coordinates in meters in the "map" ref system
 				Pcnp = self.pixels_to_meters(T, [Ppx_x,Ppx_y], resolution)
-				self._logger.info(" New CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
+				self._logger.info(" New CNP at pose (x=%.3f, y=%.3f)[m]".format(Pcnp[0], Pcnp[1]) )
 
 				# Done
 				mypose = PoseStamped()
-				mypose.header.stamp = rclpy.Time.now()
+				mypose.header.stamp = self._clock.now().to_msg()
 				mypose.header.frame_id = "map"
 				mypose.pose.position.x = Pcnp[0]
 				mypose.pose.position.y = Pcnp[1]
@@ -229,13 +233,13 @@ class nav_assist_functions(Node):
 				res.success = True
 				return res
 			else:
-				self._logger.info("Could not set CNP at pose (x=%.3f, y=%.3f)[m]",  Pcnp[0], Pcnp[1] )
+				self._logger.info("Could not set CNP at pose (x=%.3f, y=%.3f)[m]".format(Pcnp[0], Pcnp[1]) )
 
 				# CNP already exist or we are unable to set it properly
 				res.success = False
 				return res
-		except:
-			self._logger.error( f"[NavAssitant-handle_new_cnp] Unexpected error:{sys.exc_info()[0]}")
+		except Exception as error:
+			self._logger.error( f"[NavAssitant-handle_new_cnp] Unexpected error: {error}")
 			res.success = False
 			return res
 
@@ -291,7 +295,7 @@ class nav_assist_functions(Node):
 
 		# 2. Contours (list)
 		#--------------------
-		im2, contours_array, hierarchy = cv.findContours(gray, cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
+		contours_array, hierarchy = cv.findContours(gray, cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
 
 		# 3. Filter Contours (removing points in the borders of the img)
 		#--------------------
@@ -528,7 +532,7 @@ class nav_assist_functions(Node):
 		#T = np.array([ (1,0,0,Dx), (0,1,0,Dy), (0,0,1,0), (0,0,0,1) ])
 		T = np.array([ (1,0,0,Dx), (0,-1,0,Dy), (0,0,-1,0), (0,0,0,1) ])
 		npoint = self.meters_to_pixels(T,point,scale)
-		if self.verbose: print("Point in pixels: " + str(npoint[0:2]))
+		if self.verbose: self._logger.info("Point in pixels: " + str(npoint[0:2]))
 
 		# define some values
 		TH = 30.0              # [deg] angle th to consider valid points
@@ -540,34 +544,34 @@ class nav_assist_functions(Node):
 		INI_RADIUS_M = 0.1
 		RADIUS_STEP_M = 0.01 #0.025
 		END_RADIUS_M = 2.0
-		if self.verbose: print("Radius to find SP [m] from " + str(INI_RADIUS_M) + " to " + str(END_RADIUS_M) + " by " + str(RADIUS_STEP_M) )
+		if self.verbose: self._logger.info("Radius to find SP [m] from " + str(INI_RADIUS_M) + " to " + str(END_RADIUS_M) + " by " + str(RADIUS_STEP_M) )
 
 		# -- in pixels
 		INI_RADIUS_PX = INI_RADIUS_M/scale
 		RADIUS_STEP_PX = RADIUS_STEP_M/scale
 		END_RADIUS_PX = END_RADIUS_M/scale
-		N_RADIUS = (END_RADIUS_PX-INI_RADIUS_PX)/RADIUS_STEP_PX
-		if self.verbose: print("Radius to find SP [px] from " + str(INI_RADIUS_PX) + " to " + str(END_RADIUS_PX) + " by " + str(RADIUS_STEP_PX))
+		N_RADIUS = int((END_RADIUS_PX-INI_RADIUS_PX)/RADIUS_STEP_PX)
+		if self.verbose: self._logger.info("Radius to find SP [px] from " + str(INI_RADIUS_PX) + " to " + str(END_RADIUS_PX) + " by " + str(RADIUS_STEP_PX))
 
 		# robot
 		# -- in meters
-		DIAMETER_M = 2*rclpy.get_param("/move_base/global_costmap/robot_radius")
+		DIAMETER_M = 2*self.robot_radius
 		INFLATION = 1.2
-		if self.verbose: print("Robot radious[m]=%.3f, Inflation=%.3f" %(DIAMETER_M, INFLATION))
+		if self.verbose: self._logger.info("Robot radious[m]=%.3f, Inflation=%.3f" %(DIAMETER_M, INFLATION))
 
 		# distance
 		# -- in meters
 		INI_DIST_M = 0.1
 		DIST_STEP_M = 0.1
 		END_DIST_M = INFLATION*DIAMETER_M
-		if self.verbose: print("Distance to set ING [m] from " + str(INI_DIST_M) + " to " + str(END_DIST_M) + " by " + str(DIST_STEP_M) )
+		if self.verbose: self._logger.info("Distance to set ING [m] from " + str(INI_DIST_M) + " to " + str(END_DIST_M) + " by " + str(DIST_STEP_M) )
 
 		# -- in pixels
 		INI_DIST_PX = INI_DIST_M/scale
 		DIST_STEP_PX = DIST_STEP_M/scale
 		END_DIST_PX = END_DIST_M/scale
 		N_DIST = (END_DIST_PX-INI_DIST_PX)/DIST_STEP_PX
-		if self.verbose: print("Distance to set ING [px] from " + str(INI_DIST_PX) + " to " + str(END_DIST_PX) + " by " + str(DIST_STEP_PX))
+		if self.verbose: self._logger.info("Distance to set ING [px] from " + str(INI_DIST_PX) + " to " + str(END_DIST_PX) + " by " + str(DIST_STEP_PX))
 
 		#-----------
 		# main loop
@@ -575,7 +579,7 @@ class nav_assist_functions(Node):
 		pcx, pcy = 0, 0
 		found = []
 		for r in np.linspace( INI_RADIUS_PX, END_RADIUS_PX, N_RADIUS ):
-			if self.verbose: print("\nLooking SP with Radius = %.3f[m] = %.3f[px] " %(r*scale, r))
+			if self.verbose: self._logger.info("\nLooking SP with Radius = %.3f[m] = %.3f[px] " %(r*scale, r))
 
 			if len(found) >= 1:
 				found = [found[0]]    #remove sencond candidate
@@ -595,7 +599,7 @@ class nav_assist_functions(Node):
 
 				# Ensure not out of bounds
 				if cx > width or cy > height:
-					if self.verbose: print("DATA OUT OF IMAGE.. IGNORING")
+					if self.verbose: self._logger.info("DATA OUT OF IMAGE.. IGNORING")
 					ang += ANGLE_STEP
 					continue
 
@@ -608,7 +612,7 @@ class nav_assist_functions(Node):
 					# Occupied cell
 					v = [cx,cy,ang]
 					found.append(v)     # append the coordinates and angle
-					#if self.verbose: print("Found point at: %d,%d,%.3f" %(cx,cy,ang))
+					#if self.verbose: self._logger.info("Found point at: %d,%d,%.3f" %(cx,cy,ang))
 
 					#ang += SKIP_ANGLE   # skip X degrees
 					ang += ANGLE_STEP
@@ -621,7 +625,7 @@ class nav_assist_functions(Node):
 					v = found[1]
 					an = abs(v[2]-u[2])
 
-					#print("Angle1=%.3f, Angle2=%.3f,|Diff|=%.3f, Check:%.3f"%( u[2],v[2],an,abs(an-180)))
+					#self._logger.info("Angle1=%.3f, Angle2=%.3f,|Diff|=%.3f, Check:%.3f"%( u[2],v[2],an,abs(an-180)))
 					if abs(an-180) <= TH:
 						# we have found the SP points (Segment Points)
 						line = np.cross( [u[0],u[1],1], [v[0],v[1],1] )
@@ -632,8 +636,8 @@ class nav_assist_functions(Node):
 
 						nv = self.pixels_to_meters(T,v,scale)
 						nodes.append(nv[0:2].tolist())
-						if self.verbose: print("\nSP found at: %3f,%3f" %(nu[0],nu[1]))
-						if self.verbose: print("SP found at: %3f,%3f\n" %(nv[0],nv[1]))
+						if self.verbose: self._logger.info("\nSP found at: %3f,%3f" %(nu[0],nu[1]))
+						if self.verbose: self._logger.info("SP found at: %3f,%3f\n" %(nv[0],nv[1]))
 
 
 						use_costmap = True
@@ -668,7 +672,7 @@ class nav_assist_functions(Node):
 
 							np1 = self.pixels_to_meters(T,ing,scale)
 							nodes.append(np1[0:2].tolist())
-							if self.verbose: print("\nING found at: %.3f,%.3f [m]" %(np1[0],np1[1]))
+							if self.verbose: self._logger.info("\nING found at: %.3f,%.3f [m]" %(np1[0],np1[1]))
 
 							# ING2
 							px_ideal = int(round(npoint[0] - END_DIST_PX*dv[0]))     #px
@@ -686,7 +690,7 @@ class nav_assist_functions(Node):
 
 							np2 = self.pixels_to_meters(T,ing,scale)
 							nodes.append(np2[0:2].tolist())
-							if self.verbose: print("\nING found at: %.3f,%.3f [m]" %(np2[0],np2[1]))
+							if self.verbose: self._logger.info("\nING found at: %.3f,%.3f [m]" %(np2[0],np2[1]))
 
 						else:
 							#-------------------------------------
@@ -706,21 +710,21 @@ class nav_assist_functions(Node):
 							distance_range_normal = np.linspace( INI_DIST_PX, END_DIST_PX, N_DIST )
 							distance_range = distance_range_normal[::-1]
 							for d in distance_range:
-								#if self.verbose: print("Setting ING at distance %.3f[m] = %.3f[px]" %(d*scale, d))
+								#if self.verbose: self._logger.info("Setting ING at distance %.3f[m] = %.3f[px]" %(d*scale, d))
 								if not found1:
 									px1 = int(round(npoint[0] + d*dv[0]))
 									py1 = int(round(npoint[1] + d*dv[1]))
 
 									# Ensure not out of bounds
 									if px1 > width or py1 > height:
-										if self.verbose: print("ING point OUT OF IMAGE.. IGNORING")
+										if self.verbose: self._logger.info("ING point OUT OF IMAGE.. IGNORING")
 									else:
 										if img[py1][px1] == 0:
 											# Free cell
 											np1 = self.pixels_to_meters(T,[px1,py1],scale)
 											nodes.append(np1[0:2].tolist())
 											found1 = True
-											if self.verbose: print("\nING found at: %.3f,%.3f [m] with d=%.3f" %(np1[0],np1[1], d))
+											if self.verbose: self._logger.info("\nING found at: %.3f,%.3f [m] with d=%.3f" %(np1[0],np1[1], d))
 											#print (dv)
 											#print (line)
 
@@ -733,7 +737,7 @@ class nav_assist_functions(Node):
 										np2 = self.pixels_to_meters(T,[px2,py2],scale)
 										nodes.append(np2[0:2].tolist())
 										found2 = True
-										if self.verbose: print("ING found at: %3f,%3f[m] with d=%.3f\n" %(np2[0],np2[1], d))
+										if self.verbose: self._logger.info("ING found at: %3f,%3f[m] with d=%.3f\n" %(np2[0],np2[1], d))
 										#print (dv)
 										#print (line)
 
@@ -741,7 +745,7 @@ class nav_assist_functions(Node):
 									break
 
 							else:
-								print('Error [get_auxiliary_passage_nodes]: ING points could not be found!')
+								self._logger.info('Error [get_auxiliary_passage_nodes]: ING points could not be found!')
 								return None
 
 						# end-if use_costmap
