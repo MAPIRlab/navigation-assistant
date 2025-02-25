@@ -22,13 +22,13 @@ namespace rviz_nav_assistant
         virtual ~SetPointOfInterestTool()
         {}
 
-        virtual void onInitialize();
+        virtual void onInitialize() override;
 
-        virtual void activate();
+        virtual void activate() override;
 
-        virtual void deactivate();
+        virtual void deactivate() override;
 
-        virtual int processKeyEvent(QKeyEvent* event, rviz_common::RenderPanel* panel);
+        virtual int processKeyEvent(QKeyEvent* event, rviz_common::RenderPanel* panel) override;
         virtual int processMouseEvent(rviz_common::ViewportMouseEvent& event) override;
 
     private:

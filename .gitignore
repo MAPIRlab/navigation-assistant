@@ -1,1 +1,5 @@
 nav_assistant_functions/nav_assistant_functions/__pycache__
+.vscode
+log
+build
+.cache
