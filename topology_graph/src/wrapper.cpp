@@ -385,10 +385,16 @@ bool CGraphWrapper::srvCB(topology_graph::srv::Graph::Request::SharedPtr req, to
         // params: [file_path]
         if (req->params.size() == 1)
         {
-            my_graph.LoadGraph(req->params[0]);
-            res->success = true;
-            if (verbose)
-                RCLCPP_INFO(get_logger(), "[topology_graph-LoadGraph] Load graph from file done.");
+            res->success = my_graph.LoadGraph(req->params[0]);
+            if (res->success)
+            {
+                if (verbose)
+                    RCLCPP_INFO(get_logger(), "[topology_graph-LoadGraph] Load graph from file done.");
+            }
+            else
+            {
+                RCLCPP_ERROR(get_logger(), "[topology_graph-LoadGraph] Error: LoadGraph failed (see console for details).");
+            }
         }
         else
         {

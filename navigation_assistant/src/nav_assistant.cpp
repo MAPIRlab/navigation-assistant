@@ -54,6 +54,7 @@ CNavAssistant::CNavAssistant(std::string name) : Node("Nav_assistant_Server"), m
     topology_parameter = declare_parameter<std::string>("topological_json_parameter", "/topological_map");
     load_passages_as_CP = declare_parameter<bool>("load_passages_as_CP", false);
     force_CP_as_additional_ANP = declare_parameter<bool>("force_CP_as_additional_ANP", false);
+    init_from_json_file = declare_parameter<std::string>("init_from_json_file", "");
     init_from_file = declare_parameter<std::string>("init_from_file", "");
     save_to_file = declare_parameter<std::string>("save_to_file", "");
     robot_frame = declare_parameter<std::string>("robot_frame", "base_link");
@@ -121,7 +122,17 @@ void CNavAssistant::Init()
             RCLCPP_WARN(get_logger(), "[NavAssistant]: Unable to Load Graph from file. Skipping.");
     }
 
-    if (init_from_param)
+    if (init_from_json_file != "")
+    {
+        RCLCPP_INFO(get_logger(), "[NavAssistant] Loading Graph from JSON file [%s]", init_from_json_file.c_str());
+        std::ifstream ifs(init_from_json_file);
+        if (ifs.good())
+        {
+            json json_msg = json::parse(ifs);
+            get_graph_data_from_json(json_msg);
+        }
+    }
+    else if (init_from_param)
     {
         // The topology is provided externally (MoveCare project)
         RCLCPP_INFO(get_logger(), "[NavAssistant] Loading Graph from parameter [%s]", topology_parameter.c_str());
@@ -513,6 +524,7 @@ void CNavAssistant::execute()
         if (node0[1] != node1[1]) // Orphan node. Remove it
             path.erase(path.end());
 
+        std::vector<geometry_msgs::msg::PoseStamped> all_waypoints;
         // Step by Step NAVIGATION
         for (size_t i = 0; i < path.size(); i++)
         {

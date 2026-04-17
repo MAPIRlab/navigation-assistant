@@ -12,6 +12,15 @@ CAHGraph::~CAHGraph()
 bool CAHGraph::LoadGraph(const std::string file)
 {
     std::ifstream fin(file.c_str());
+    if (!fin.is_open())
+    {
+        std::cerr << "[CAHGraph::LoadGraph] Error: Could not open file " << file << std::endl;
+        return false;
+    }
+
+    // Clear current graph before loading new data
+    grafo.clear();
+    edge_id = 0;
 
     boost::dynamic_properties dp;
     dp.property("id", get(&VertexProperty::id, grafo));
@@ -28,7 +37,22 @@ bool CAHGraph::LoadGraph(const std::string file)
     dp.property("type", get(&EdgeProperty::type, grafo));
     dp.property("weight", get(&EdgeProperty::weight, grafo));
 
-    boost::read_graphviz(fin, grafo, dp); //,"node_id");
+    try {
+        boost::read_graphviz(fin, grafo, dp);
+    } catch (const std::exception& e) {
+        std::cerr << "[CAHGraph::LoadGraph] Boost Graphviz Error: " << e.what() << std::endl;
+        return false;
+    }
+
+    // After loading, we might have "ghost" nodes if the .dot file had gaps in indices.
+    // Ensure they are marked as invalid.
+    std::pair<VertexItr, VertexItr> vp;
+    for (vp = vertices(grafo); vp.first != vp.second; ++vp.first)
+    {
+        if (grafo[*vp.first].label == "")
+            grafo[*vp.first].invalid = true;
+    }
+
     return true;
 }
 

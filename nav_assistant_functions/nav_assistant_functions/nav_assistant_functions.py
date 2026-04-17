@@ -274,7 +274,7 @@ class nav_assist_functions(Node):
 			self.showImageAndWait(img2, "full costmap-image")
 
 		# CROP around this point
-		s = 30      #px
+		s = 10      #px
 		crop_img = img[int(cell_r-s):int(cell_r+s), int(cell_c-s):int(cell_c+s)]
 		#self.showImageAndWait(crop_img, "cropped image")
 
@@ -563,7 +563,7 @@ class nav_assist_functions(Node):
 		# -- in meters
 		INI_DIST_M = 0.1
 		DIST_STEP_M = 0.1
-		END_DIST_M = INFLATION*DIAMETER_M
+		END_DIST_M = INFLATION*DIAMETER_M*1.0
 		if self.verbose: self._logger.info("Distance to set ING [m] from " + str(INI_DIST_M) + " to " + str(END_DIST_M) + " by " + str(DIST_STEP_M) )
 
 		# -- in pixels
@@ -661,7 +661,7 @@ class nav_assist_functions(Node):
 
 							# Look for min cost in a square (sub-area) around the ideal point
 							if False:
-								W_SIZE_px = 8
+								W_SIZE_px = 12
 								px_min = int(round(px_ideal - W_SIZE_px))
 								px_max = int(round(px_ideal + W_SIZE_px))
 								py_min = int(round(py_ideal - W_SIZE_px))

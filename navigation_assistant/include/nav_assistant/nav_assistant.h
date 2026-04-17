@@ -178,7 +178,7 @@ private:
     // Parameters
     bool verbose; // true/false
     bool init_from_param, load_passages_as_CP, force_CP_as_additional_ANP;
-    std::string topology_parameter, init_from_file, save_to_file;
+    std::string topology_parameter, init_from_file, init_from_json_file, save_to_file;
     std::string topology_str;
     int counter;
 
